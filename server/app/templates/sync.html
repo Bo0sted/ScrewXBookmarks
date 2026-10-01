@@ -14,8 +14,13 @@
     <tr><th>Last run</th><td>{{ state.last_start | date(true) }} → {{ state.last_finish | date(true) }}</td></tr>
     <tr><th>Last successful run</th><td>{{ state.last_success | date(true) }}</td></tr>
     {% if state.last_error %}<tr><th>Last error</th><td class="bad">{{ state.last_error }}</td></tr>{% endif %}
+    <tr><th>Archive import</th><td>
+      {% if archive.pending %}<span class="warn">in progress</span> — {{ "{:,}".format(archive.done) }}/{{ "{:,}".format(archive.total) }} ({{ "%.1f" | format(archive.percent) }}%) · catch-up and backfill wait until it's finished
+      {% elif archive.total %}complete{% if state.archive_completed_at %} ({{ state.archive_completed_at | date }}){% endif %}
+      {% else %}<span class="muted">none — see Archive below</span>{% endif %}
+    </td></tr>
     <tr><th>History backfill</th><td>
-      {% if state.backfill_done == '1' %}complete ({{ state.backfill_finished_at | date }}){% else %}<span class="warn">in progress</span>{% endif %}
+      {% if state.backfill_done == '1' %}complete ({{ state.backfill_finished_at | date }}{% if state.backfill_finished_manually == '1' %}, marked by hand{% endif %}){% else %}<span class="warn">in progress</span>{% endif %}
       — oldest indexed repost: {{ oldest | date }}
     </td></tr>
     <tr><th>Indexed</th><td>{{ stats.posts }} reposts, {{ stats.missing }} unavailable
@@ -31,8 +36,63 @@
     <form method="post" action="/sync/run"><button {% if running or not configured %}disabled{% endif %}>Sync now</button></form>
     <form method="post" action="/sync/retry-failed"><button {% if not stats.failed %}disabled{% endif %}>Retry failed downloads</button></form>
     <form method="post" action="/sync/restart-backfill" onsubmit="return confirm('Walk your whole timeline again from the top? Already-saved posts are skipped.')"><button>Restart backfill</button></form>
+    <form method="post" action="/sync/finish-backfill" onsubmit="return confirm('Mark the history backfill as complete? Runs will only check for new reposts (plus any archive import).')"><button {% if state.backfill_done == '1' %}disabled{% endif %}>Finish backfill</button></form>
   </div>
 </div>
+
+<h2>Archive</h2>
+<div class="post">
+  <p style="margin-top:0">Upload <code>tweets.js</code> (or <code>tweets.json</code>) from your X data archive to fetch reposts older than
+  what X's timeline allows. Only post IDs and dates are kept from the file; each post is then fetched with the same
+  pacing and rate cap as the sync, newest first. Posts the sync already saved are skipped. If your archive is split into
+  <code>tweets-part1.js</code>, <code>tweets-part2.js</code>…, upload each one.</p>
+
+  {% if archive.total %}
+  <div class="bar" title="{{ '%.1f' | format(archive.percent) }}%"><div style="width: {{ '%.2f' | format(archive.percent) }}%"></div></div>
+  <table class="kv">
+    <tr><th>Progress</th><td><b>{{ "{:,}".format(archive.done) }} / {{ "{:,}".format(archive.total) }}</b> completed ({{ "%.1f" | format(archive.percent) }}%)</td></tr>
+    <tr><th>Breakdown</th><td>{{ "{:,}".format(archive.saved) }} saved · {{ "{:,}".format(archive.known) }} already had · {{ "{:,}".format(archive.missing) }} unavailable · {{ "{:,}".format(archive.pending) }} to go</td></tr>
+    {% if last_import %}
+    <tr><th>Last upload</th><td>{{ last_import.file }} · {{ last_import.at | date(true) }} · {{ "{:,}".format(last_import.tweets) }} tweets,
+      {{ "{:,}".format(last_import.reposts) }} reposts ({{ "{:,}".format(last_import.added) }} new to the queue, {{ "{:,}".format(last_import.already_saved) }} already saved by sync{% if last_import.duplicates %}, {{ "{:,}".format(last_import.duplicates) }} uploaded before{% endif %}{% if last_import.malformed %}, {{ last_import.malformed }} unreadable entries skipped{% endif %})</td></tr>
+    {% endif %}
+  </table>
+  {% endif %}
+
+  <div class="actions">
+    <input type="file" id="archive-file" accept=".js,.json,application/json,text/javascript">
+    <button id="archive-upload">Upload</button>
+    {% if archive.pending %}
+    <form method="post" action="/archive/cancel" onsubmit="return confirm('Stop the archive import? Posts already saved stay; the remaining ones are dropped from the queue.')"><button>Cancel import</button></form>
+    {% endif %}
+  </div>
+  <p id="archive-result" class="muted" hidden></p>
+</div>
+<script>
+  (() => {
+    const input = document.getElementById("archive-file");
+    const btn = document.getElementById("archive-upload");
+    const out = document.getElementById("archive-result");
+    const say = (text, bad) => { out.hidden = false; out.textContent = text; out.className = bad ? "bad" : "muted"; };
+    btn.addEventListener("click", async () => {
+      const file = input.files[0];
+      if (!file) return say("Choose tweets.js / tweets.json first.", true);
+      btn.disabled = true;
+      say(`Uploading and checking ${file.name} (${(file.size / 1048576).toFixed(1)} MB)…`);
+      try {
+        const r = await fetch(`/archive/import?filename=${encodeURIComponent(file.name)}`, { method: "POST", body: file });
+        const j = await r.json();
+        if (!r.ok) return say(`Not imported: ${j.error}`, true);
+        say(`OK: ${j.tweets.toLocaleString()} tweets, ${j.reposts.toLocaleString()} reposts — ${j.added.toLocaleString()} new to the queue, ${j.already_saved.toLocaleString()} already saved by sync. Reloading…`);
+        setTimeout(() => location.reload(), 1500);
+      } catch (e) {
+        say(`Upload failed: ${e}`, true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  })();
+</script>
 
 <h2>Reset</h2>
 <div class="post danger">

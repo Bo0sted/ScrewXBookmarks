@@ -8,7 +8,7 @@ from .thumbs import CACHE_DIR
 log = logging.getLogger("reset")
 
 # Children before parents (foreign keys).
-TABLES = ("media", "avatars", "posts", "authors", "missing", "state")
+TABLES = ("media", "avatars", "posts", "authors", "missing", "archive_items", "state")
 
 
 def wipe_everything() -> None:

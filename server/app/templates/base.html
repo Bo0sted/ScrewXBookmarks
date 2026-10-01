@@ -62,6 +62,9 @@
   .btn-danger:hover:not(:disabled) { border-color: #ff7b72; }
   code { background: var(--line); padding: 0 .3em; border-radius: 4px; }
   .more { display: block; margin: 1rem auto 2rem; }
+  .bar { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; margin: .2rem 0 .8rem; }
+  .bar > div { height: 100%; background: var(--accent); }
+  input[type=file] { color: var(--muted); max-width: 100%; }
   body.noscroll { overflow: hidden; }
   #viewer { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .93);
             display: grid; grid-template-rows: minmax(0, 1fr) auto; }

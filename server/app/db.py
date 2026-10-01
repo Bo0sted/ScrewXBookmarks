@@ -61,6 +61,18 @@ CREATE TABLE IF NOT EXISTS missing (
   raw         TEXT
 );
 
+-- Reposts listed in an uploaded X archive (IDs only), fetched one by one by the archive phase.
+CREATE TABLE IF NOT EXISTS archive_items (
+  repost_id   TEXT PRIMARY KEY,
+  original_id TEXT,
+  rt_handle   TEXT,
+  reposted_at TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'pending',  -- pending | saved | known (already had) | missing
+  note        TEXT,
+  updated_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS archive_by_status ON archive_items(status, reposted_at DESC);
+
 CREATE TABLE IF NOT EXISTS state (
   key   TEXT PRIMARY KEY,
   value TEXT

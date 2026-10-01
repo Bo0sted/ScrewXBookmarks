@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -9,13 +10,14 @@ from .config import MEDIA_DIR  # noqa: I001  (must import first: disables twscra
 from fastapi import FastAPI, HTTPException, Query, Request
 from urllib.parse import urlencode
 
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import db, downloader, logs, thumbs
 from .reset import wipe_everything
-from .sync import WINDOW_MAX_REQUESTS, api_usage, restart_backfill, status_line, syncer
+from . import archive, backfill
+from .sync import WINDOW_MAX_REQUESTS, api_usage, status_line, syncer
 
 logs.setup()
 log = logging.getLogger("web")
@@ -183,8 +185,10 @@ def recent(request: Request, page: int = Query(1, ge=1), partial: int = 0):
 @app.get("/sync")
 def sync_status(request: Request):
     keys = ["last_start", "last_finish", "last_success", "last_error", "next_run", "backfill_done",
-            "backfill_finished_at", "statuses_count", "user_id"]
+            "backfill_finished_at", "backfill_finished_manually", "statuses_count", "user_id",
+            "archive_completed_at"]
     state = {k: db.get_state(k) for k in keys}
+    last_import = json.loads(db.get_state("archive_last_import") or "null")
     with db.tx() as c:
         stats = _stats(c)
         oldest = c.execute("SELECT MIN(reposted_at) FROM posts").fetchone()[0]
@@ -198,8 +202,34 @@ def sync_status(request: Request):
         {"stats": stats, "state": state, "oldest": oldest, "missing": missing, "failed": failed,
          "running": syncer.running, "progress": syncer.progress, "configured": syncer.configured,
          "api_used": api_used, "api_max": WINDOW_MAX_REQUESTS,
-         "capped_until": datetime.fromtimestamp(capped_until).astimezone().strftime("%H:%M") if capped_until else None},
+         "capped_until": datetime.fromtimestamp(capped_until).astimezone().strftime("%H:%M") if capped_until else None,
+         "archive": archive.progress(), "last_import": last_import},
     )
+
+
+@app.post("/archive/import")
+async def archive_import(request: Request, filename: str = "tweets.js"):
+    """Raw file upload (the page sends the file as the request body)."""
+    data = await request.body()
+    if not data:
+        return JSONResponse({"error": "the file is empty"}, status_code=400)
+    try:
+        summary = await asyncio.to_thread(archive.import_archive, data, filename[:200])
+    except archive.ArchiveError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, **summary}
+
+
+@app.post("/archive/cancel")
+def archive_cancel():
+    archive.cancel()
+    return RedirectResponse("/sync", status_code=303)
+
+
+@app.post("/sync/finish-backfill")
+def sync_finish_backfill():
+    backfill.finish()
+    return RedirectResponse("/sync", status_code=303)
 
 
 @app.post("/sync/run")
@@ -210,7 +240,7 @@ def sync_run():
 
 @app.post("/sync/restart-backfill")
 def sync_restart_backfill():
-    restart_backfill()
+    backfill.restart()
     return RedirectResponse("/sync", status_code=303)
 
 
