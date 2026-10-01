@@ -10,7 +10,9 @@ A run only fetches a random number of pages, so large backfills are spread over 
 import asyncio
 import logging
 import math
+import json
 import random
+import time
 from contextlib import suppress
 from datetime import datetime, timedelta
 
@@ -28,6 +30,11 @@ log = logging.getLogger("sync")
 
 KNOWN_STREAK_STOP = 20
 EMPTY_PAGES_END = 2
+
+# Hard cap on authenticated X requests, independent of the random pacing. X's observed limit for
+# timeline requests is ~50 per 15 min; staying far below it avoids looking like a bot.
+WINDOW_SECONDS = 15 * 60
+WINDOW_MAX_REQUESTS = 30
 
 
 class SyncError(RuntimeError):
@@ -113,6 +120,7 @@ class Syncer:
         try:
             budget = session_page_budget()
             self.progress = "looking up account"
+            await self._throttle()
             me = await self.api.user_by_login(X_USERNAME)
             if me is None:
                 raise SyncError(await self._account_problem() or f"could not look up @{X_USERNAME}")
@@ -153,6 +161,7 @@ class Syncer:
             }
             if cursor:
                 kv["cursor"] = cursor
+            await self._throttle()
             rep = await client.get(f"{GQL_URL}/{OP_UserTweets}", params=encode_params({"variables": kv, "features": GQL_FEATURES}))
             if rep is None:
                 raise SyncError(await self._account_problem() or "X aborted the request (auth, rate limit or API change)")
@@ -189,6 +198,21 @@ class Syncer:
                 return budget, "caught_up"
             await asyncio.sleep(page_pause())
         return budget, "budget"
+
+    async def _throttle(self) -> None:
+        """Blocks until another X request fits in the rolling window, then records it.
+        Timestamps live in the DB so a restart can't reset the window."""
+        while True:
+            now = time.time()
+            recent = [t for t in json.loads(db.get_state("api_requests", "[]")) if now - t < WINDOW_SECONDS]
+            if len(recent) < WINDOW_MAX_REQUESTS:
+                recent.append(now)
+                db.set_state(api_requests=json.dumps(recent))
+                return
+            wait = recent[0] + WINDOW_SECONDS - now + random.uniform(5, 60)
+            self.progress = f"pausing {int(wait // 60)}m{int(wait % 60):02d}s (rate cap: {WINDOW_MAX_REQUESTS} requests / 15 min)"
+            log.info("rate cap reached, pausing %.0fs", wait)
+            await asyncio.sleep(wait)
 
     def _ingest(self, r: dict) -> None:
         try:
