@@ -127,12 +127,12 @@ class Run:
             wait = until - time.time() + random.uniform(5, 60)
             resume = datetime.now().astimezone() + timedelta(seconds=wait)
             self.progress(
-                f"cooling down {fmt_duration(wait)} until {resume.strftime('%H:%M')} "
+                f"cooling down {fmt_duration(wait)} until {resume.strftime('%-I:%M %p')} "
                 f"(rate cap: {WINDOW_MAX_REQUESTS} requests / 15 min)"
             )
             log.info(
                 "rate cap · %d/%d requests in the last 15 min · cooling down %s (resumes %s)",
-                WINDOW_MAX_REQUESTS, WINDOW_MAX_REQUESTS, fmt_duration(wait), resume.strftime("%H:%M:%S"),
+                WINDOW_MAX_REQUESTS, WINDOW_MAX_REQUESTS, fmt_duration(wait), resume.strftime("%-I:%M:%S %p"),
             )
             await asyncio.sleep(wait)
 

@@ -162,7 +162,7 @@ def disable_batch(reason: str) -> None:
     db.set_state(batch_disabled_until=until)
     forget_op(BATCH_OP)
     log.warning("batch lookups unavailable (%s) · using one-by-one lookups until %s",
-                reason, datetime.fromtimestamp(until).astimezone().strftime("%H:%M"))
+                reason, datetime.fromtimestamp(until).astimezone().strftime("%-I:%M %p"))
 
 
 def _next_batch() -> list:

@@ -102,7 +102,7 @@ class Syncer:
             due = time.time() + delay
             next_run = datetime.now().astimezone() + timedelta(seconds=delay)
             db.set_state(next_run=next_run.isoformat(timespec="seconds"))
-            log.info("next run at %s (in %s)", next_run.strftime("%H:%M"), fmt_duration(delay))
+            log.info("next run at %s (in %s)", next_run.strftime("%-I:%M %p"), fmt_duration(delay))
             while (remaining := due - time.time()) > 0:
                 try:
                     await asyncio.wait_for(self._trigger.wait(), timeout=min(remaining, HEARTBEAT_SECONDS))

@@ -44,7 +44,7 @@ async def _mutation(api, name: str, variables: dict) -> dict:
         for fresh in (False, True):  # a 404 usually means a stale x-client-transaction-id (as in twscrape)
             until = reserve_request(write=True)
             if until:
-                at = datetime.fromtimestamp(until).astimezone().strftime("%H:%M")
+                at = datetime.fromtimestamp(until).astimezone().strftime("%-I:%M %p")
                 raise ActionError(f"Rate cap reached; nothing was changed. Try again after {at}")
             gen = await XClIdGenStore.get(acc.username, cookies=acc.cookies, fresh=fresh)
             rep = await clt.request(

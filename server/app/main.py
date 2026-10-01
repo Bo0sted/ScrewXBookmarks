@@ -50,7 +50,7 @@ def _fmt_date(iso: str | None, with_time: bool = False) -> str:
     if not iso:
         return "—"
     d = datetime.fromisoformat(iso).astimezone()
-    return d.strftime("%Y-%m-%d %H:%M" if with_time else "%Y-%m-%d")
+    return d.strftime("%Y-%m-%d %-I:%M %p" if with_time else "%Y-%m-%d")
 
 
 templates.env.filters["date"] = _fmt_date
@@ -205,10 +205,10 @@ def sync_status(request: Request):
         {"stats": stats, "state": state, "oldest": oldest, "missing": missing, "failed": failed,
          "running": syncer.running, "progress": syncer.progress, "configured": syncer.configured,
          "api_used": api_used, "api_max": WINDOW_MAX_REQUESTS,
-         "capped_until": datetime.fromtimestamp(capped_until).astimezone().strftime("%H:%M") if capped_until else None,
+         "capped_until": datetime.fromtimestamp(capped_until).astimezone().strftime("%-I:%M %p") if capped_until else None,
          "archive": archive.progress(), "last_import": last_import,
          "batch_until": None if archive.batch_available() else
-             datetime.fromtimestamp(float(db.get_state("batch_disabled_until"))).astimezone().strftime("%H:%M")},
+             datetime.fromtimestamp(float(db.get_state("batch_disabled_until"))).astimezone().strftime("%-I:%M %p")},
     )
 
 

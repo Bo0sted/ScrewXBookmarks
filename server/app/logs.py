@@ -44,7 +44,7 @@ def fmt_bytes(n: float) -> str:
 
 class _Formatter(logging.Formatter):
     def format(self, r: logging.LogRecord) -> str:
-        ts = time.strftime("%H:%M:%S", time.localtime(r.created))
+        ts = time.strftime("%I:%M:%S %p", time.localtime(r.created))
         name = {"uvicorn": "web", "uvicorn.error": "web"}.get(r.name, r.name)
         name_color = (_NAME.get(name, "") if _COLOR else "")
         msg = r.getMessage()
