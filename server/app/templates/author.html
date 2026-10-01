@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}@{{ a.handle }} · ScrewXBookmarks{% endblock %}
+{% block main %}
+<div class="profile">
+  {% if a.avatar_file %}<img class="avatar big" src="/media/avatars/{{ a.avatar_file }}" alt="">{% else %}<span class="avatar big"></span>{% endif %}
+  <div>
+    <h1>{{ a.name }}</h1>
+    <div class="muted">
+      <a href="https://x.com/{{ a.handle }}" target="_blank" rel="noopener">@{{ a.handle }}</a>
+      · id <a href="https://x.com/i/user/{{ a.id }}" target="_blank" rel="noopener" title="Works even if they change their handle">{{ a.id }}</a>
+      · {{ total }} reposted
+    </div>
+  </div>
+</div>
+{% set show_author = false %}
+{% for p in posts %}{% include "_post.html" %}{% endfor %}
+{% include "_pager.html" %}
+{% endblock %}

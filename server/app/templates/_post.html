@@ -1,0 +1,29 @@
+<article class="post">
+  <div class="meta">
+    {% if show_author %}
+      <a class="by" href="/u/{{ p.author_id }}">
+        {% if p.avatar_file %}<img class="avatar" src="/media/avatars/{{ p.avatar_file }}" alt="">{% endif %}
+        {{ p.name }} <span class="muted">@{{ p.handle }}</span>
+      </a>
+    {% endif %}
+    <span title="Posted">posted {{ p.posted_at | date }}</span>
+    <span title="{{ p.reposted_at | date(true) }}">reposted {{ p.reposted_at | date }}</span>
+    <a href="https://x.com/{{ p.handle }}/status/{{ p.id }}" target="_blank" rel="noopener">view on X ↗</a>
+  </div>
+  {% if p.text %}<div class="text">{{ p.text }}</div>{% endif %}
+  {% if p.media %}
+  <div class="media">
+    {% for m in p.media %}
+      {% if m.status != 'done' %}
+        <div class="placeholder">{{ m.type }} · {{ m.status }}</div>
+      {% elif m.type == 'photo' %}
+        <a href="/media/{{ m.file }}" target="_blank"><img src="/media/{{ m.file }}" loading="lazy" alt=""></a>
+      {% elif m.type == 'gif' %}
+        <video src="/media/{{ m.file }}" loop muted playsinline preload="metadata"></video>
+      {% else %}
+        <video src="/media/{{ m.file }}" controls loop muted playsinline preload="metadata"></video>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+</article>

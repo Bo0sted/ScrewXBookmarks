@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Authors · ScrewXBookmarks{% endblock %}
+{% block main %}
+<form method="get"><input type="search" name="q" value="{{ q }}" placeholder="Filter authors…"></form>
+{% if not authors %}
+  <p class="muted">{% if q %}No authors match “{{ q }}”.{% else %}Nothing indexed yet — check the <a href="/sync">sync page</a>.{% endif %}</p>
+{% endif %}
+<div class="folders">
+  {% for a in authors %}
+  <a class="folder" href="/u/{{ a.id }}">
+    <div class="folder-head">
+      {% if a.avatar_file %}<img class="avatar" src="/media/avatars/{{ a.avatar_file }}" alt="" loading="lazy">{% else %}<span class="avatar"></span>{% endif %}
+      <span class="who">
+        <div>{{ a.name }}</div>
+        <div class="muted">@{{ a.handle }} · {{ a.n }} post{{ '' if a.n == 1 else 's' }} · last {{ a.last | date }}</div>
+      </span>
+    </div>
+    {% if a.preview %}
+    <div class="thumbs">
+      {% for m in a.preview %}
+        {% if m.type == 'photo' %}
+          <img src="/media/{{ m.file }}" loading="lazy" alt="">
+        {% else %}
+          <video src="/media/{{ m.file }}" muted loop playsinline preload="metadata"></video>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="muted thumbs-empty">text posts only</div>
+    {% endif %}
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}

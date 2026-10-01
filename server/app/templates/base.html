@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}ScrewXBookmarks{% endblock %}</title>
+<style>
+  :root {
+    --bg: #0e1013; --panel: #171a1f; --line: #262a31; --text: #e6e8eb; --muted: #8b93a0;
+    --accent: #7aa2ff; --warn: #e5a13a; --bad: #e5534b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line);
+           display: flex; gap: 1.25rem; align-items: center; padding: .7rem 1.25rem; flex-wrap: wrap; }
+  header .brand { font-weight: 700; color: var(--text); }
+  header .stats { margin-left: auto; color: var(--muted); font-size: 13px; display: flex; gap: 1rem; }
+  .warn { color: var(--warn); } .bad { color: var(--bad); }
+  main { max-width: 1100px; margin: 0 auto; padding: 1.25rem; }
+  .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--line); object-fit: cover; flex: none; }
+  .avatar.big { width: 72px; height: 72px; }
+  .muted { color: var(--muted); }
+  input[type=search] { background: var(--panel); border: 1px solid var(--line); color: var(--text);
+                       padding: .5rem .75rem; border-radius: 8px; width: 100%; max-width: 360px; }
+  .folders { display: flex; flex-direction: column; gap: .7rem; margin-top: 1rem; }
+  .folder { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+            padding: .7rem .8rem; color: var(--text); }
+  .folder:hover { border-color: var(--accent); text-decoration: none; }
+  .folder-head { display: flex; gap: .7rem; align-items: center; min-width: 0; }
+  .folder-head .who { min-width: 0; }
+  .folder-head .who div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .thumbs { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: .3rem; margin-top: .6rem; }
+  .thumbs img, .thumbs video { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; background: #000; display: block; }
+  .thumbs-empty { margin-top: .5rem; font-size: 13px; }
+  @media (max-width: 700px) { .thumbs { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+  .profile { display: flex; gap: 1rem; align-items: center; margin-bottom: 1.25rem; }
+  .profile h1 { margin: 0; font-size: 1.4rem; }
+  .post { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .9rem 1rem; margin-bottom: .8rem; }
+  .post .meta { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--muted); margin-bottom: .45rem; }
+  .post .meta .by { display: flex; gap: .5rem; align-items: center; color: var(--text); font-weight: 600; }
+  .post .meta .by .avatar { width: 24px; height: 24px; }
+  .post .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .media { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .4rem; margin-top: .6rem; }
+  .media img, .media video { width: 100%; max-height: 520px; object-fit: contain; background: #000; border-radius: 8px; display: block; }
+  .media .placeholder { aspect-ratio: 16/9; border-radius: 8px; border: 1px dashed var(--line); display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+  table.kv { border-collapse: collapse; width: 100%; }
+  table.kv th, table.kv td { text-align: left; padding: .35rem .6rem .35rem 0; vertical-align: top; border-bottom: 1px solid var(--line); }
+  table.kv th { color: var(--muted); font-weight: 500; width: 9rem; }
+  table.kv td { overflow-wrap: anywhere; }
+  .actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .9rem; }
+  .actions form { margin: 0; }
+  button { background: var(--line); color: var(--text); border: 1px solid #353b44; border-radius: 8px; padding: .45rem .9rem; font: inherit; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  .post.danger { border-color: #5a2a28; }
+  .btn-danger { background: #3a1716; border-color: var(--bad); color: #ffb3ae; }
+  .btn-danger:hover:not(:disabled) { border-color: #ff7b72; }
+  code { background: var(--line); padding: 0 .3em; border-radius: 4px; }
+  .pager { display: flex; gap: 1rem; justify-content: center; margin: 1.5rem 0; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="/">ScrewXBookmarks</a>
+  <a href="/">Recent</a>
+  <a href="/authors">Authors</a>
+  <a href="/sync">Sync{% if stats.syncing %} <span class="warn">●</span>{% endif %}</a>
+  <span class="stats">
+    <span>{{ stats.posts }} posts · {{ stats.authors }} authors</span>
+    {% if stats.pending %}<span class="warn">{{ stats.pending }} downloading</span>{% endif %}
+    {% if stats.failed %}<span class="bad">{{ stats.failed }} failed</span>{% endif %}
+    {% if stats.missing %}<a class="warn" href="/sync" title="Reposts whose original post is unavailable">{{ stats.missing }} unavailable</a>{% endif %}
+  </span>
+</header>
+<main>{% block main %}{% endblock %}</main>
+<script>
+  // Like X: videos/gifs play (muted) while mostly visible; leaving view pauses and rewinds.
+  // "Mostly visible" = half the video, or half the screen for videos taller than the screen.
+  const inView = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const v = e.target;
+      const visible = e.isIntersecting &&
+        (e.intersectionRatio >= 0.5 || e.intersectionRect.height >= window.innerHeight * 0.5);
+      if (visible) {
+        if (v.paused) v.play().catch(() => {});
+      } else if (!e.isIntersecting) {
+        v.pause();
+        v.currentTime = 0;
+      } else {
+        v.pause();
+      }
+    }
+  }, { threshold: [0, 0.1, 0.25, 0.5, 0.75, 1] });
+  document.querySelectorAll("video").forEach((v) => inView.observe(v));
+</script>
+</body>
+</html>

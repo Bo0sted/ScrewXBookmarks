@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Sync · ScrewXBookmarks{% endblock %}
+{% block main %}
+<h1 style="margin-top:0">Sync</h1>
+
+{% if not configured %}
+  <p class="bad">X_USERNAME / X_COOKIES are not set — syncing is disabled.</p>
+{% endif %}
+
+<div class="post">
+  <table class="kv">
+    <tr><th>Status</th><td>{% if running %}<span class="warn">running</span> — {{ progress }}{% else %}idle{% endif %}</td></tr>
+    <tr><th>Next scheduled run</th><td>{{ state.next_run | date(true) }}</td></tr>
+    <tr><th>Last run</th><td>{{ state.last_start | date(true) }} → {{ state.last_finish | date(true) }}</td></tr>
+    <tr><th>Last successful run</th><td>{{ state.last_success | date(true) }}</td></tr>
+    {% if state.last_error %}<tr><th>Last error</th><td class="bad">{{ state.last_error }}</td></tr>{% endif %}
+    <tr><th>History backfill</th><td>
+      {% if state.backfill_done == '1' %}complete ({{ state.backfill_finished_at | date }}){% else %}<span class="warn">in progress</span>{% endif %}
+      — oldest indexed repost: {{ oldest | date }}
+    </td></tr>
+    <tr><th>Indexed</th><td>{{ stats.posts }} reposts, {{ stats.missing }} unavailable
+      {% if state.statuses_count %}<span class="muted">(X reports {{ state.statuses_count }} total posts on your account — that count mixes your own tweets, replies and reposts)</span>{% endif %}
+    </td></tr>
+    <tr><th>Downloads</th><td>{{ stats.pending }} pending, {{ stats.failed }} failed</td></tr>
+  </table>
+  <div class="actions">
+    <form method="post" action="/sync/run"><button {% if running or not configured %}disabled{% endif %}>Sync now</button></form>
+    <form method="post" action="/sync/retry-failed"><button {% if not stats.failed %}disabled{% endif %}>Retry failed downloads</button></form>
+    <form method="post" action="/sync/restart-backfill" onsubmit="return confirm('Walk your whole timeline again from the top? Already-saved posts are skipped.')"><button>Restart backfill</button></form>
+  </div>
+</div>
+
+<h2>Reset</h2>
+<div class="post danger">
+  <p style="margin-top:0">Deletes <b>everything</b>: every downloaded file and avatar, the whole index, sync progress and the
+  stored X session. Starts over like a fresh install. This cannot be undone.</p>
+  <p class="muted">Your <code>.env</code> file (X username/cookies, paths) lives outside the app and is not touched — if cookies
+  are set there, syncing starts again from scratch afterwards.</p>
+  <form method="post" action="/reset" id="reset-form">
+    <input type="hidden" name="confirm" value="">
+    <button class="btn-danger" type="submit">Reset everything…</button>
+  </form>
+</div>
+<script>
+  document.getElementById("reset-form").addEventListener("submit", (ev) => {
+    const typed = prompt('This permanently deletes all media and data.\nType RESET to confirm.');
+    if (typed !== "RESET") { ev.preventDefault(); return; }
+    ev.target.action = "/reset?confirm=RESET";
+  });
+</script>
+
+{% if missing %}
+<h2>Unavailable reposts</h2>
+<div class="post"><table class="kv">
+  {% for m in missing %}
+  <tr><td>{{ m.reposted_at | date }}</td>
+      <td>{% if m.tweet_id %}<a href="https://x.com/i/status/{{ m.tweet_id }}" target="_blank" rel="noopener">{{ m.tweet_id }}</a>{% else %}repost {{ m.repost_id }}{% endif %}</td>
+      <td class="muted">{{ m.reason }}</td></tr>
+  {% endfor %}
+</table></div>
+{% endif %}
+
+{% if failed %}
+<h2>Failed downloads</h2>
+<div class="post"><table class="kv">
+  {% for f in failed %}<tr><td>{{ f.file }}</td><td class="muted">{{ f.error }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+{% endblock %}

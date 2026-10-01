@@ -1,0 +1,7 @@
+{% if pages > 1 %}
+<nav class="pager">
+  {% if page > 1 %}<a href="?page={{ page - 1 }}">← newer</a>{% endif %}
+  <span>page {{ page }} / {{ pages }}</span>
+  {% if page < pages %}<a href="?page={{ page + 1 }}">older →</a>{% endif %}
+</nav>
+{% endif %}
