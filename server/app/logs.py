@@ -17,6 +17,8 @@ _NAME = {
     "sync": "\033[36m",
     "downloads": "\033[35m",
     "x-api": "\033[34m",
+    "archive": "\033[96m",
+    "thumbs": "\033[94m",
     "web": "\033[32m",
     "reset": "\033[31m",
 }

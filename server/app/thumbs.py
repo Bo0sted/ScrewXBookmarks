@@ -2,15 +2,20 @@
 
 import logging
 import os
+import queue
 import re
 import subprocess
 import tempfile
 import threading
+import time
 from collections import defaultdict
+from contextlib import contextmanager
 
 from PIL import Image, ImageOps
 
-from .config import MEDIA_DIR
+from . import db
+from .config import AVATAR_DIR, MEDIA_DIR
+from .logs import fmt_duration
 
 log = logging.getLogger("thumbs")
 
@@ -144,3 +149,82 @@ def _save_frames(frames: list[Image.Image], width: int, out: str) -> None:
             duration=ANIM_FRAME_MS, loop=0, quality=ANIM_QUALITY, method=4,
         )
     os.replace(tmp, out)
+
+
+# ---------- background worker ----------
+# Thumbnails are made here, separately from downloads, so a slow video preview never holds up the
+# download queue. The "queue" is just files missing thumbnails: new downloads are pushed in directly,
+# and a periodic scan picks up anything older (e.g. after a restart).
+
+SIZES_FOR = {"media": ("s", "m"), "avatars": ("s",)}
+SCAN_EVERY = 600
+REPORT_SECONDS = 60
+
+_queue: queue.Queue = queue.Queue()
+_busy = threading.Lock()
+_gave_up: set[tuple[str, str]] = set()  # couldn't be made (e.g. corrupt video); not retried until restart
+
+
+def enqueue(table: str, file: str) -> None:
+    _queue.put((table, file))
+
+
+@contextmanager
+def paused():
+    """Blocks the worker between thumbnails, so nothing is half-written while held."""
+    with _busy:
+        yield
+
+
+def start() -> None:
+    threading.Thread(target=_run, name="thumbnails", daemon=True).start()
+
+
+def _name(table: str, file: str) -> str:
+    return f"avatars/{file}" if table == "avatars" else file
+
+
+def _missing(table: str, file: str) -> bool:
+    return any(not os.path.exists(cache_path(_name(table, file), s)) for s in SIZES_FOR[table])
+
+
+def _scan() -> int:
+    with db.tx() as c:
+        rows = [(t, r["file"]) for t in SIZES_FOR for r in c.execute(f"SELECT file FROM {t} WHERE status='done' ORDER BY rowid DESC")]
+    todo = [(t, f) for t, f in rows if (t, f) not in _gave_up and _missing(t, f)]
+    for item in todo:
+        _queue.put(item)
+    return len(todo)
+
+
+def _run() -> None:
+    found = _scan()
+    if found:
+        log.info("%s files need thumbnails", f"{found:,}")
+    made, since, last_scan = 0, time.time(), time.time()
+    while True:
+        try:
+            table, file = _queue.get(timeout=30)
+        except queue.Empty:
+            if made:
+                log.info("+%d made in %s · all caught up", made, fmt_duration(time.time() - since))
+                made, since = 0, time.time()
+            if time.time() - last_scan >= SCAN_EVERY:
+                _scan()
+                last_scan = time.time()
+            continue
+        if not made:
+            since = time.time()
+        try:
+            with _busy:
+                if _missing(table, file) and os.path.isfile(os.path.join(AVATAR_DIR if table == "avatars" else MEDIA_DIR, file)):
+                    ensure_all(_name(table, file), SIZES_FOR[table])
+                    if _missing(table, file):
+                        _gave_up.add((table, file))
+                    else:
+                        made += 1
+        except Exception:
+            log.exception("thumbnail worker failed on %s", file)
+        if made and time.time() - since >= REPORT_SECONDS:
+            log.info("+%d made in %s · %s waiting", made, fmt_duration(time.time() - since), f"{_queue.qsize():,}")
+            made, since = 0, time.time()

@@ -30,6 +30,7 @@ async def lifespan(_app: FastAPI):
     db.init()
     log.info("started · %s", status_line())
     downloader.start()
+    thumbs.start()
     await syncer.start()
     yield
     await syncer.stop()
