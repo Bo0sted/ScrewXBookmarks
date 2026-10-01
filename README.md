@@ -7,7 +7,7 @@ downloads all media and author avatars to disk. A small web UI browses them by a
 ## Layout on disk
 
 ```
-<DATA_PATH>/
+/path/to/apps/ScrewXBookmarks/
 ├── media/            # <tweet_id>_<n>.<ext>, flat
 │   └── avatars/      # <author_id>_<hash>.<ext>, flat; old avatars are kept
 ├── db.sqlite         # index: authors, posts, media, sync state
@@ -16,10 +16,7 @@ downloads all media and author avatars to disk. A small web UI browses them by a
 
 ## Setup
 
-1. `cp .env.example .env` and fill it in. For `X_COOKIES`, open x.com logged in, go to devtools →
-   Storage → Cookies → `https://x.com`, and copy `auth_token` and `ct0`:
-   `X_COOKIES="auth_token=...; ct0=..."`. These are equivalent to your password; keep `.env` private.
-2. Create `docker-compose.yml` next to `.env`:
+1. Create `docker-compose.yml` in the repo root and fill in the `environment` values and data path:
 
    ```yaml
    services:
@@ -27,23 +24,25 @@ downloads all media and author avatars to disk. A small web UI browses them by a
        build: ./server
        container_name: screwxbookmarks
        restart: unless-stopped
-       user: "${PUID:-1000}:${PGID:-1000}"
+       user: "1000:1000"
        ports:
-         - "${PORT:-8080}:8080"
+         - "8080:8080"
        environment:
-         X_USERNAME: ${X_USERNAME:?set X_USERNAME in .env}
-         X_COOKIES: ${X_COOKIES:?set X_COOKIES in .env}
-         QUIET_HOURS: ${QUIET_HOURS:-1-8}
-         TZ: ${TZ:-UTC}
+         X_USERNAME: your_handle
+         X_COOKIES: "auth_token=...; ct0=..."
+         QUIET_HOURS: "1-8"   # local hours when scheduled syncs won't start; "" = never pause
+         TZ: UTC              # timezone for QUIET_HOURS and dates shown in the UI
        volumes:
-         - ${DATA_PATH:?set DATA_PATH in .env}:/data
+         - /path/to/apps/ScrewXBookmarks:/data
    ```
 
-3. `docker compose up -d --build`
-4. Open `http://<server>:8080/sync`. The first run starts within ~1 minute, or press **Sync now**.
+   For `X_COOKIES`, open x.com logged in, go to devtools → Storage → Cookies → `https://x.com`, and
+   copy `auth_token` and `ct0`. These are equivalent to your password; keep this file private.
+2. `docker compose up -d --build`
+3. Open `http://<server>:8080/sync`. The first run starts within ~1 minute, or press **Sync now**.
 
 If X logs you out (or cookies expire), the sync page shows the error; paste fresh cookies into
-`.env` and `docker compose up -d`.
+`docker-compose.yml` and run `docker compose up -d`.
 
 ## How syncing behaves
 
@@ -62,6 +61,6 @@ If X logs you out (or cookies expire), the sync page shows the error; paste fres
 
 ```
 python -m venv .venv && .venv/bin/pip install -r server/requirements.txt
-set -a && . ./.env && set +a
-DATA_DIR=$PWD/data .venv/bin/uvicorn app.main:app --app-dir server --reload
+DATA_DIR=$PWD/data X_USERNAME=your_handle X_COOKIES='auth_token=...; ct0=...' \
+  .venv/bin/uvicorn app.main:app --app-dir server --reload
 ```

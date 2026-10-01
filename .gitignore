@@ -1,4 +1,4 @@
-.env
+docker-compose.yml
 data/
 .venv/
 __pycache__/

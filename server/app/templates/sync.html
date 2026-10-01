@@ -34,8 +34,8 @@
 <div class="post danger">
   <p style="margin-top:0">Deletes <b>everything</b>: every downloaded file and avatar, the whole index, sync progress and the
   stored X session. Starts over like a fresh install. This cannot be undone.</p>
-  <p class="muted">Your <code>.env</code> file (X username/cookies, paths) lives outside the app and is not touched — if cookies
-  are set there, syncing starts again from scratch afterwards.</p>
+  <p class="muted">Your X username and cookies come from <code>docker-compose.yml</code> and are not touched — syncing
+  starts again from scratch afterwards.</p>
   <form method="post" action="/reset" id="reset-form">
     <input type="hidden" name="confirm" value="">
     <button class="btn-danger" type="submit">Reset everything…</button>
