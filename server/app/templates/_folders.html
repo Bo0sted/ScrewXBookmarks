@@ -1,0 +1,24 @@
+{% for a in authors %}
+<a class="folder" href="/u/{{ a.id }}">
+  <div class="folder-head">
+    {% if a.avatar_file %}<img class="avatar" src="/thumb/s/avatars/{{ a.avatar_file }}" alt="" loading="lazy">{% else %}<span class="avatar"></span>{% endif %}
+    <span class="who">
+      <div>{{ a.name }}</div>
+      <div class="muted">@{{ a.handle }} · {{ a.n }} post{{ '' if a.n == 1 else 's' }} · last {{ a.last | date }}</div>
+    </span>
+  </div>
+  {% if a.preview %}
+  <div class="thumbs">
+    {% for m in a.preview %}
+      <img class="mi" data-type="{{ m.type }}" data-idx="{{ m.idx }}" data-count="{{ m.count }}"
+           data-full="/media/{{ m.file }}" data-src="/thumb/s/{{ m.file }}"
+           data-caption="{{ a.name }} (@{{ m.handle }}) · {{ m.posted_at | date }}"
+           data-link="https://x.com/{{ m.handle }}/status/{{ m.post_id }}" alt="">
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="muted thumbs-empty">text posts only</div>
+  {% endif %}
+</a>
+{% endfor %}
+{% if next_url %}<button class="more" data-next="{{ next_url }}">Load more</button>{% endif %}

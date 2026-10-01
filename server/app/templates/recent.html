@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Recent · ScrewXBookmarks{% endblock %}
 {% block main %}
-{% set show_author = true %}
-{% for p in posts %}{% include "_post.html" %}{% else %}<p class="muted">Nothing indexed yet — check the <a href="/sync">sync page</a>.</p>{% endfor %}
-{% include "_pager.html" %}
+{% if posts %}
+<div class="feed">{% include "_feed.html" %}</div>
+{% else %}
+<p class="muted">Nothing indexed yet — check the <a href="/sync">sync page</a>.</p>
+{% endif %}
 {% endblock %}

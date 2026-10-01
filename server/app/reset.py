@@ -3,6 +3,7 @@ import os
 
 from . import db, downloader
 from .config import AVATAR_DIR, MEDIA_DIR, TWS_DB_PATH
+from .thumbs import CACHE_DIR
 
 log = logging.getLogger("reset")
 
@@ -11,7 +12,7 @@ TABLES = ("media", "avatars", "posts", "authors", "missing", "state")
 
 
 def wipe_everything() -> None:
-    """Deletes all indexed data, downloaded files and the stored X session. Caller must stop sync first."""
+    """Deletes all indexed data, downloaded files, thumbnails and the stored X session. Caller must stop sync first."""
     with downloader.paused():
         with db.tx() as c:
             for t in TABLES:
@@ -23,7 +24,7 @@ def wipe_everything() -> None:
             conn.close()
 
         removed = 0
-        for d in (AVATAR_DIR, MEDIA_DIR):
+        for d in (AVATAR_DIR, MEDIA_DIR, CACHE_DIR):
             for name in os.listdir(d):
                 path = os.path.join(d, name)
                 if os.path.isfile(path):

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from . import db
+from . import db, thumbs
 from .config import AVATAR_DIR, MEDIA_DIR
 from .logs import fmt_bytes, fmt_duration
 
@@ -161,6 +161,7 @@ def _run() -> None:
                         progress.add(size)
             if not job:
                 progress.report(idle=True)
+                _backfill_thumbnails()
                 _wake.wait(60)
                 continue
             time.sleep(random.uniform(0.5, 3))
@@ -176,5 +177,48 @@ def _process(client: httpx.Client, table: str, row) -> int | None:
         _failed(table, row["file"], row["attempts"], repr(e), permanent=False)
     else:
         _succeeded(table, row["file"])
+        _make_thumbnails(table, row["file"])
         return size
     return None
+
+
+THUMB_SIZES = {"media": ("s", "m"), "avatars": ("s",)}
+_thumbs_backfilled = False
+
+
+def _thumb_name(table: str, file: str) -> str:
+    return f"avatars/{file}" if table == "avatars" else file
+
+
+def _make_thumbnails(table: str, file: str) -> None:
+    try:
+        thumbs.ensure_all(_thumb_name(table, file), THUMB_SIZES[table])
+    except Exception:
+        log.exception("thumbnail generation failed for %s", file)
+
+
+def _backfill_thumbnails() -> None:
+    """While idle, make thumbnails for media downloaded before thumbnails existed. Yields to new downloads."""
+    global _thumbs_backfilled
+    if _thumbs_backfilled:
+        return
+    with db.tx() as c:
+        rows = [(t, r["file"]) for t in THUMB_SIZES for r in c.execute(f"SELECT file FROM {t} WHERE status='done' ORDER BY rowid DESC")]
+    todo = [(t, f) for t, f in rows if any(not os.path.exists(thumbs.cache_path(_thumb_name(t, f), s)) for s in THUMB_SIZES[t])]
+    if todo:
+        log.info("making thumbnails for %d existing files", len(todo))
+    done, last_report = 0, time.time()
+    for table, file in todo:
+        if _wake.is_set():  # new downloads queued: handle those first, resume later
+            log.info("thumbnails: %d/%d done, pausing for new downloads", done, len(todo))
+            return
+        with _busy:
+            if os.path.exists(os.path.join(DIRS[table], file)):
+                _make_thumbnails(table, file)
+        done += 1
+        if time.time() - last_report >= REPORT_SECONDS:
+            log.info("thumbnails: %d/%d done", done, len(todo))
+            last_report = time.time()
+    if todo:
+        log.info("thumbnails: all %d done", len(todo))
+    _thumbs_backfilled = True

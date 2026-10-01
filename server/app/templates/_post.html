@@ -1,8 +1,11 @@
-<article class="post">
+<article class="post"
+  data-caption="{{ p.name }} (@{{ p.handle }}) · {{ p.posted_at | date }}"
+  data-link="https://x.com/{{ p.handle }}/status/{{ p.id }}"
+  data-count="{{ p.media | length }}">
   <div class="meta">
     {% if show_author %}
       <a class="by" href="/u/{{ p.author_id }}">
-        {% if p.avatar_file %}<img class="avatar" src="/media/avatars/{{ p.avatar_file }}" alt="">{% endif %}
+        {% if p.avatar_file %}<img class="avatar" src="/thumb/s/avatars/{{ p.avatar_file }}" loading="lazy" alt="">{% endif %}
         {{ p.name }} <span class="muted">@{{ p.handle }}</span>
       </a>
     {% endif %}
@@ -17,11 +20,12 @@
       {% if m.status != 'done' %}
         <div class="placeholder">{{ m.type }} · {{ m.status }}</div>
       {% elif m.type == 'photo' %}
-        <a href="/media/{{ m.file }}" target="_blank"><img src="/media/{{ m.file }}" loading="lazy" alt=""></a>
-      {% elif m.type == 'gif' %}
-        <video src="/media/{{ m.file }}" loop muted playsinline preload="metadata"></video>
+        <img class="mi" data-type="photo" data-idx="{{ loop.index0 }}" data-full="/media/{{ m.file }}"
+             data-src="/thumb/m/{{ m.file }}" alt="">
       {% else %}
-        <video src="/media/{{ m.file }}" controls loop muted playsinline preload="metadata"></video>
+        <video class="mi" data-type="{{ m.type }}" data-idx="{{ loop.index0 }}" data-full="/media/{{ m.file }}"
+               data-src="/media/{{ m.file }}" data-poster="/thumb/m/{{ m.file }}"
+               muted loop playsinline preload="none"></video>
       {% endif %}
     {% endfor %}
   </div>

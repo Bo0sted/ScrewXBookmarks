@@ -32,7 +32,7 @@
   .folder-head .who { min-width: 0; }
   .folder-head .who div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .thumbs { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: .3rem; margin-top: .6rem; }
-  .thumbs img, .thumbs video { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; background: #000; display: block; }
+  .thumbs img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; background: #000; display: block; }
   .thumbs-empty { margin-top: .5rem; font-size: 13px; }
   @media (max-width: 700px) { .thumbs { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
   .profile { display: flex; gap: 1rem; align-items: center; margin-bottom: 1.25rem; }
@@ -44,6 +44,9 @@
   .post .text { white-space: pre-wrap; overflow-wrap: anywhere; }
   .media { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .4rem; margin-top: .6rem; }
   .media img, .media video { width: 100%; max-height: 520px; object-fit: contain; background: #000; border-radius: 8px; display: block; }
+  .media img:not([src]) { aspect-ratio: 4/3; }
+  .media video:not([poster]) { aspect-ratio: 16/9; }
+  .mi { cursor: zoom-in; }
   .media .placeholder { aspect-ratio: 16/9; border-radius: 8px; border: 1px dashed var(--line); display: grid; place-items: center; color: var(--muted); font-size: 13px; }
   table.kv { border-collapse: collapse; width: 100%; }
   table.kv th, table.kv td { text-align: left; padding: .35rem .6rem .35rem 0; vertical-align: top; border-bottom: 1px solid var(--line); }
@@ -58,7 +61,26 @@
   .btn-danger { background: #3a1716; border-color: var(--bad); color: #ffb3ae; }
   .btn-danger:hover:not(:disabled) { border-color: #ff7b72; }
   code { background: var(--line); padding: 0 .3em; border-radius: 4px; }
-  .pager { display: flex; gap: 1rem; justify-content: center; margin: 1.5rem 0; color: var(--muted); }
+  .more { display: block; margin: 1rem auto 2rem; }
+  body.noscroll { overflow: hidden; }
+  #viewer { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .93);
+            display: grid; grid-template-rows: minmax(0, 1fr) auto; }
+  #viewer[hidden] { display: none; }
+  .v-stage { display: grid; place-items: center; min-height: 0; padding: 3.5rem 5rem 0; }
+  .v-media { max-width: 100%; max-height: calc(100vh - 7.5rem); object-fit: contain; border-radius: 6px; background: #000; }
+  .v-caption { text-align: center; padding: .8rem 1rem 1.1rem; color: #cfd3da; font-size: 14px; overflow-wrap: anywhere; }
+  .v-btn { position: fixed; z-index: 51; width: 3rem; height: 3rem; border-radius: 50%; padding: 0;
+           font-size: 1.9rem; line-height: 1; background: rgba(255, 255, 255, .1); border: none; color: #fff; }
+  .v-btn:hover:not(:disabled) { background: rgba(255, 255, 255, .22); }
+  .v-btn:disabled { opacity: .2; }
+  .v-prev, .v-next { top: 50%; transform: translateY(-50%); }
+  .v-prev { left: 1rem; }
+  .v-next { right: 1rem; }
+  .v-close { top: .8rem; right: 1rem; }
+  @media (max-width: 700px) {
+    .v-stage { padding: 3.5rem .4rem 0; }
+    .v-prev, .v-next { top: auto; bottom: 3.6rem; transform: none; }
+  }
 </style>
 </head>
 <body>
@@ -75,25 +97,13 @@
   </span>
 </header>
 <main>{% block main %}{% endblock %}</main>
-<script>
-  // Like X: videos/gifs play (muted) while mostly visible; leaving view pauses and rewinds.
-  // "Mostly visible" = half the video, or half the screen for videos taller than the screen.
-  const inView = new IntersectionObserver((entries) => {
-    for (const e of entries) {
-      const v = e.target;
-      const visible = e.isIntersecting &&
-        (e.intersectionRatio >= 0.5 || e.intersectionRect.height >= window.innerHeight * 0.5);
-      if (visible) {
-        if (v.paused) v.play().catch(() => {});
-      } else if (!e.isIntersecting) {
-        v.pause();
-        v.currentTime = 0;
-      } else {
-        v.pause();
-      }
-    }
-  }, { threshold: [0, 0.1, 0.25, 0.5, 0.75, 1] });
-  document.querySelectorAll("video").forEach((v) => inView.observe(v));
-</script>
+<div id="viewer" hidden>
+  <button class="v-btn v-close" aria-label="Close">×</button>
+  <button class="v-btn v-prev" aria-label="Previous">‹</button>
+  <div class="v-stage"></div>
+  <button class="v-btn v-next" aria-label="Next">›</button>
+  <div class="v-caption"></div>
+</div>
+<script src="/static/app.js?v={{ asset_v }}"></script>
 </body>
 </html>

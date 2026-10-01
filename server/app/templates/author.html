@@ -2,7 +2,7 @@
 {% block title %}@{{ a.handle }} · ScrewXBookmarks{% endblock %}
 {% block main %}
 <div class="profile">
-  {% if a.avatar_file %}<img class="avatar big" src="/media/avatars/{{ a.avatar_file }}" alt="">{% else %}<span class="avatar big"></span>{% endif %}
+  {% if a.avatar_file %}<img class="avatar big" src="/thumb/s/avatars/{{ a.avatar_file }}" alt="">{% else %}<span class="avatar big"></span>{% endif %}
   <div>
     <h1>{{ a.name }}</h1>
     <div class="muted">
@@ -12,7 +12,5 @@
     </div>
   </div>
 </div>
-{% set show_author = false %}
-{% for p in posts %}{% include "_post.html" %}{% endfor %}
-{% include "_pager.html" %}
+<div class="feed">{% include "_feed.html" %}</div>
 {% endblock %}

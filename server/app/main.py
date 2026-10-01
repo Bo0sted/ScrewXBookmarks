@@ -7,18 +7,20 @@ from pathlib import Path
 from .config import MEDIA_DIR  # noqa: I001  (must import first: disables twscrape telemetry)
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from urllib.parse import urlencode
+
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import db, downloader, logs
+from . import db, downloader, logs, thumbs
 from .reset import wipe_everything
 from .sync import WINDOW_MAX_REQUESTS, api_usage, restart_backfill, status_line, syncer
 
 logs.setup()
 log = logging.getLogger("web")
 
-PAGE_SIZE = 50
+PAGE_SIZE = 30
 
 
 @asynccontextmanager
@@ -32,9 +34,13 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="ScrewXBookmarks", lifespan=lifespan)
+STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+# Cache-buster so browsers pick up a new app.js after an update.
+templates.env.globals["asset_v"] = int((STATIC_DIR / "app.js").stat().st_mtime)
 
 
 def _fmt_date(iso: str | None, with_time: bool = False) -> str:
@@ -77,69 +83,101 @@ def _with_media(c, posts: list) -> list[dict]:
 
 
 FOLDER_PREVIEW = 10
+AUTHORS_PAGE = 40
+
+
+def _next_url(request: Request, page: int, has_more: bool) -> str | None:
+    """URL of the next chunk, fetched by the page's infinite scroll (partial=1 returns just the items)."""
+    if not has_more:
+        return None
+    params = dict(request.query_params)
+    params.update(page=str(page + 1), partial="1")
+    return f"{request.url.path}?{urlencode(params)}"
+
+
+@app.get("/thumb/{size}/{file:path}")
+def thumb(size: str, file: str):
+    path = thumbs.ensure(file, size)
+    if not path:
+        raise HTTPException(404, "no thumbnail")
+    return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 @app.get("/authors")
-def authors(request: Request, q: str = ""):
+def authors(request: Request, q: str = "", page: int = Query(1, ge=1), partial: int = 0):
     with db.tx() as c:
-        sql = """SELECT a.id, a.handle, a.name, a.avatar_file, COUNT(p.id) AS n, MAX(p.reposted_at) AS last
-                 FROM authors a JOIN posts p ON p.author_id = a.id"""
-        args: list = []
+        where, args = "", []
         if q:
-            sql += " WHERE a.handle LIKE ? OR a.name LIKE ?"
+            where = "WHERE a.handle LIKE ? OR a.name LIKE ?"
             args = [f"%{q}%", f"%{q}%"]
-        sql += " GROUP BY a.id ORDER BY last DESC"
-        rows = [dict(a) for a in c.execute(sql, args).fetchall()]
+        rows = c.execute(
+            f"""SELECT a.id, a.handle, a.name, a.avatar_file, COUNT(p.id) AS n, MAX(p.reposted_at) AS last
+                FROM authors a JOIN posts p ON p.author_id = a.id {where}
+                GROUP BY a.id ORDER BY last DESC LIMIT ? OFFSET ?""",
+            [*args, AUTHORS_PAGE + 1, (page - 1) * AUTHORS_PAGE],
+        ).fetchall()
+        has_more = len(rows) > AUTHORS_PAGE
+        rows = [dict(r) for r in rows[:AUTHORS_PAGE]]
         previews: dict[str, list] = {}
-        for m in c.execute(
-            """SELECT author_id, file, type FROM (
-                 SELECT p.author_id, m.file, m.type,
-                        ROW_NUMBER() OVER (PARTITION BY p.author_id ORDER BY p.reposted_at DESC, m.idx) AS rn
-                 FROM media m JOIN posts p ON p.id = m.post_id WHERE m.status = 'done'
-               ) WHERE rn <= ? ORDER BY author_id, rn""",
-            (FOLDER_PREVIEW,),
-        ):
-            previews.setdefault(m["author_id"], []).append(dict(m))
+        if rows:
+            ids = [r["id"] for r in rows]
+            for m in c.execute(
+                f"""SELECT * FROM (
+                      SELECT p.author_id, p.id AS post_id, p.handle, p.posted_at, m.file, m.type, m.idx,
+                             (SELECT COUNT(*) FROM media m2 WHERE m2.post_id = p.id) AS count,
+                             ROW_NUMBER() OVER (PARTITION BY p.author_id ORDER BY p.reposted_at DESC, m.idx) AS rn
+                      FROM media m JOIN posts p ON p.id = m.post_id
+                      WHERE m.status = 'done' AND p.author_id IN ({','.join('?' * len(ids))})
+                    ) WHERE rn <= ? ORDER BY author_id, rn""",
+                [*ids, FOLDER_PREVIEW],
+            ):
+                previews.setdefault(m["author_id"], []).append(dict(m))
         for a in rows:
             a["preview"] = previews.get(a["id"], [])
-        stats = _stats(c)
-    return templates.TemplateResponse(request, "authors.html", {"authors": rows, "q": q, "stats": stats})
+        ctx = {"authors": rows, "q": q, "next_url": _next_url(request, page, has_more)}
+        if partial:
+            return templates.TemplateResponse(request, "_folders.html", ctx)
+        ctx["stats"] = _stats(c)
+    return templates.TemplateResponse(request, "authors.html", ctx)
 
 
 @app.get("/u/{author_id}")
-def author(request: Request, author_id: str, page: int = Query(1, ge=1)):
+def author(request: Request, author_id: str, page: int = Query(1, ge=1), partial: int = 0):
     with db.tx() as c:
         a = c.execute("SELECT * FROM authors WHERE id=?", (author_id,)).fetchone()
         if not a:
             raise HTTPException(404, "unknown author")
-        total = c.execute("SELECT COUNT(*) FROM posts WHERE author_id=?", (author_id,)).fetchone()[0]
         posts = c.execute(
-            "SELECT * FROM posts WHERE author_id=? ORDER BY reposted_at DESC LIMIT ? OFFSET ?",
-            (author_id, PAGE_SIZE, (page - 1) * PAGE_SIZE),
+            """SELECT p.*, a.name, a.avatar_file FROM posts p JOIN authors a ON a.id = p.author_id
+               WHERE p.author_id=? ORDER BY p.reposted_at DESC LIMIT ? OFFSET ?""",
+            (author_id, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE),
         ).fetchall()
-        posts = _with_media(c, posts)
-        stats = _stats(c)
-    return templates.TemplateResponse(
-        request, "author.html",
-        {"a": a, "posts": posts, "total": total, "page": page, "pages": max(1, -(-total // PAGE_SIZE)), "stats": stats},
-    )
+        has_more = len(posts) > PAGE_SIZE
+        posts = _with_media(c, posts[:PAGE_SIZE])
+        ctx = {"posts": posts, "show_author": False, "next_url": _next_url(request, page, has_more)}
+        if partial:
+            return templates.TemplateResponse(request, "_feed.html", ctx)
+        ctx["a"] = a
+        ctx["total"] = c.execute("SELECT COUNT(*) FROM posts WHERE author_id=?", (author_id,)).fetchone()[0]
+        ctx["stats"] = _stats(c)
+    return templates.TemplateResponse(request, "author.html", ctx)
 
 
 @app.get("/")
-def recent(request: Request, page: int = Query(1, ge=1)):
+def recent(request: Request, page: int = Query(1, ge=1), partial: int = 0):
     with db.tx() as c:
-        total = c.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
         posts = c.execute(
             """SELECT p.*, a.name, a.avatar_file FROM posts p JOIN authors a ON a.id = p.author_id
                ORDER BY p.reposted_at DESC LIMIT ? OFFSET ?""",
-            (PAGE_SIZE, (page - 1) * PAGE_SIZE),
+            (PAGE_SIZE + 1, (page - 1) * PAGE_SIZE),
         ).fetchall()
-        posts = _with_media(c, posts)
-        stats = _stats(c)
-    return templates.TemplateResponse(
-        request, "recent.html",
-        {"posts": posts, "total": total, "page": page, "pages": max(1, -(-total // PAGE_SIZE)), "stats": stats},
-    )
+        has_more = len(posts) > PAGE_SIZE
+        posts = _with_media(c, posts[:PAGE_SIZE])
+        ctx = {"posts": posts, "show_author": True, "next_url": _next_url(request, page, has_more)}
+        if partial:
+            return templates.TemplateResponse(request, "_feed.html", ctx)
+        ctx["stats"] = _stats(c)
+    return templates.TemplateResponse(request, "recent.html", ctx)
 
 
 @app.get("/sync")
