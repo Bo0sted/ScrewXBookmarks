@@ -33,4 +33,4 @@ def wipe_everything() -> None:
         for suffix in ("", "-wal", "-shm", "-journal"):
             if os.path.exists(TWS_DB_PATH + suffix):
                 os.remove(TWS_DB_PATH + suffix)
-    log.warning("reset: all data wiped (%d files removed)", removed)
+    log.warning("all data wiped · %d files removed", removed)

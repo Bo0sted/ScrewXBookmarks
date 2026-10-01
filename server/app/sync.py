@@ -24,6 +24,7 @@ from twscrape.queue_client import QueueClient
 from twscrape.utils import encode_params
 
 from . import db, downloader, store
+from .logs import fmt_duration
 from .parse import ParseError, bottom_cursor, count_timeline_items, find_reposts, parse_tweet
 
 log = logging.getLogger("sync")
@@ -35,6 +36,44 @@ EMPTY_PAGES_END = 2
 # timeline requests is ~50 per 15 min; staying far below it avoids looking like a bot.
 WINDOW_SECONDS = 15 * 60
 WINDOW_MAX_REQUESTS = 30
+
+HEARTBEAT_SECONDS = 30 * 60
+
+STOP_REASONS = {
+    "budget": "page budget for this run used up",
+    "caught_up": "caught up with your latest reposts",
+    "end": "reached the end of the timeline",
+}
+
+
+def api_usage() -> tuple[int, float | None]:
+    """(requests in the current 15-min window, unix time the cap lifts if currently capped)."""
+    now = time.time()
+    recent = [t for t in json.loads(db.get_state("api_requests", "[]")) if now - t < WINDOW_SECONDS]
+    capped_until = recent[0] + WINDOW_SECONDS if len(recent) >= WINDOW_MAX_REQUESTS else None
+    return len(recent), capped_until
+
+
+def _index_summary() -> tuple[int, str]:
+    with db.tx() as c:
+        total, oldest = c.execute("SELECT COUNT(*), MIN(reposted_at) FROM posts").fetchone()
+    return total, (oldest[:10] if oldest else "—")
+
+
+def status_line() -> str:
+    total, oldest = _index_summary()
+    with db.tx() as c:
+        pending, failed = c.execute(
+            """SELECT
+                 (SELECT COUNT(*) FROM media WHERE status='pending') + (SELECT COUNT(*) FROM avatars WHERE status='pending'),
+                 (SELECT COUNT(*) FROM media WHERE status='failed') + (SELECT COUNT(*) FROM avatars WHERE status='failed')"""
+        ).fetchone()
+    backfill = "backfill done" if db.get_state("backfill_done") == "1" else f"backfill in progress (oldest {oldest})"
+    used, _ = api_usage()
+    line = f"{total:,} reposts indexed · {backfill} · {pending:,} downloads pending"
+    if failed:
+        line += f", {failed} failed"
+    return line + f" · api {used}/{WINDOW_MAX_REQUESTS} in 15 min"
 
 
 class SyncError(RuntimeError):
@@ -74,6 +113,7 @@ class Syncer:
         self.api = API(TWS_DB_PATH)
         self.running = False
         self.progress = ""
+        self._run_pages = self._run_new = 0
         self._trigger = asyncio.Event()
         self._task: asyncio.Task | None = None
 
@@ -102,11 +142,18 @@ class Syncer:
     async def _loop(self) -> None:
         delay = random.uniform(20, 90)
         while True:
-            db.set_state(next_run=(datetime.now().astimezone() + timedelta(seconds=delay)).isoformat(timespec="seconds"))
-            try:
-                await asyncio.wait_for(self._trigger.wait(), timeout=delay)
-            except TimeoutError:
-                pass
+            due = time.time() + delay
+            next_run = datetime.now().astimezone() + timedelta(seconds=delay)
+            db.set_state(next_run=next_run.isoformat(timespec="seconds"))
+            log.info("next run at %s (in %s)", next_run.strftime("%H:%M"), fmt_duration(delay))
+            while (remaining := due - time.time()) > 0:
+                try:
+                    await asyncio.wait_for(self._trigger.wait(), timeout=min(remaining, HEARTBEAT_SECONDS))
+                    log.info("sync requested from the web UI")
+                    break
+                except TimeoutError:
+                    if due - time.time() > 1:
+                        log.info("idle · %s · next run in %s", status_line(), fmt_duration(due - time.time()))
             self._trigger.clear()
             await self.run_once()
             backfilling = db.get_state("backfill_done") != "1"
@@ -116,9 +163,12 @@ class Syncer:
         if self.running:
             return
         self.running = True
+        self._run_pages = self._run_new = 0
+        started = time.time()
         db.set_state(last_start=db.now(), last_error=None)
         try:
             budget = session_page_budget()
+            log.info("run started · up to %d pages this run · %s", budget, status_line())
             self.progress = "looking up account"
             await self._throttle()
             me = await self.api.user_by_login(X_USERNAME)
@@ -126,6 +176,7 @@ class Syncer:
                 raise SyncError(await self._account_problem() or f"could not look up @{X_USERNAME}")
             my_id = str(me.id)
             db.set_state(user_id=my_id, statuses_count=me.statusesCount)
+            log.info("signed in as @%s · X reports %s posts on the account", X_USERNAME, f"{me.statusesCount:,}")
             await asyncio.sleep(page_pause())
 
             done = db.get_state("backfill_done") == "1"
@@ -134,13 +185,22 @@ class Syncer:
             async with QueueClient(self.api.pool, "UserTweets") as client:
                 budget, why = await self._walk(client, my_id, None, deep, budget)
                 if not done and not deep and why == "caught_up" and budget > 0:
+                    log.info("caught up with new reposts · resuming history backfill")
                     await asyncio.sleep(page_pause())
-                    await self._walk(client, my_id, cursor, True, budget)
+                    budget, why = await self._walk(client, my_id, cursor, True, budget)
             db.set_state(last_success=db.now())
+            log.info(
+                "run finished in %s · %d pages · +%d new reposts · %s",
+                fmt_duration(time.time() - started), self._run_pages, self._run_new, STOP_REASONS[why],
+            )
         except asyncio.CancelledError:
+            log.info("run interrupted after %d pages · progress is saved, it will resume next run", self._run_pages)
             raise
+        except SyncError as e:
+            log.error("run stopped after %d pages: %s", self._run_pages, e)
+            db.set_state(last_error=str(e))
         except Exception as e:
-            log.exception("sync failed")
+            log.exception("run failed after %d pages", self._run_pages)
             db.set_state(last_error=f"{type(e).__name__}: {e}")
         finally:
             self.running = False
@@ -168,6 +228,7 @@ class Syncer:
             page = rep.json()
             budget -= 1
             pages += 1
+            self._run_pages += 1
 
             new = known = 0
             for r in find_reposts(page, my_id):
@@ -178,6 +239,7 @@ class Syncer:
                 streak = 0
                 new += 1
                 self._ingest(r)
+            self._run_new += new
             if new:
                 downloader.wake()
 
@@ -185,18 +247,39 @@ class Syncer:
             empty = empty + 1 if count_timeline_items(page) == 0 else 0
             if deep and nxt:
                 db.set_state(backfill_cursor=nxt)
-            self.progress = f"{mode}: page {pages}, {new} new / {known} known on last page"
-            log.info("%s page %d: %d new, %d known reposts", mode, pages, new, known)
 
             if not nxt or nxt == cursor or empty >= EMPTY_PAGES_END:
-                if deep:
+                stop = "end"
+            elif not deep and streak >= KNOWN_STREAK_STOP:
+                stop = "caught_up"
+            elif budget <= 0:
+                stop = "budget"
+            else:
+                stop = None
+            pause = 0.0 if stop else page_pause()
+
+            total, oldest = _index_summary()
+            used, _ = api_usage()
+            self.progress = (
+                f"{mode} · page {self._run_pages} · +{self._run_new} new this run · "
+                f"api {used}/{WINDOW_MAX_REQUESTS} in 15 min"
+            )
+            log.info(
+                "%s p%d · +%d new, %d known · %s indexed · oldest %s · api %d/%d · %s",
+                mode, self._run_pages, new, known, f"{total:,}", oldest, used, WINDOW_MAX_REQUESTS,
+                "stopping" if stop else f"next page in {fmt_duration(pause)}",
+            )
+
+            if stop:
+                if stop == "end" and deep:
                     db.set_state(backfill_done=1, backfill_cursor=None, backfill_finished_at=db.now())
-                    log.info("backfill reached the end of the timeline")
-                return budget, "end"
+                    log.info("backfill complete · reached the end of your timeline (oldest repost %s)", oldest)
+                return budget, stop
             cursor = nxt
-            if not deep and streak >= KNOWN_STREAK_STOP:
-                return budget, "caught_up"
-            await asyncio.sleep(page_pause())
+            if pause > 60:
+                self.progress += f" · taking a {fmt_duration(pause)} break"
+                log.info("taking a %s break (human-like pause)", fmt_duration(pause))
+            await asyncio.sleep(pause)
         return budget, "budget"
 
     async def _throttle(self) -> None:
@@ -210,8 +293,15 @@ class Syncer:
                 db.set_state(api_requests=json.dumps(recent))
                 return
             wait = recent[0] + WINDOW_SECONDS - now + random.uniform(5, 60)
-            self.progress = f"pausing {int(wait // 60)}m{int(wait % 60):02d}s (rate cap: {WINDOW_MAX_REQUESTS} requests / 15 min)"
-            log.info("rate cap reached, pausing %.0fs", wait)
+            resume = datetime.now().astimezone() + timedelta(seconds=wait)
+            self.progress = (
+                f"cooling down {fmt_duration(wait)} until {resume.strftime('%H:%M')} "
+                f"(rate cap: {WINDOW_MAX_REQUESTS} requests / 15 min)"
+            )
+            log.info(
+                "rate cap · %d/%d requests in the last 15 min · cooling down %s (resumes %s)",
+                len(recent), WINDOW_MAX_REQUESTS, fmt_duration(wait), resume.strftime("%H:%M:%S"),
+            )
             await asyncio.sleep(wait)
 
     def _ingest(self, r: dict) -> None:

@@ -22,6 +22,10 @@
       {% if state.statuses_count %}<span class="muted">(X reports {{ state.statuses_count }} total posts on your account — that count mixes your own tweets, replies and reposts)</span>{% endif %}
     </td></tr>
     <tr><th>Downloads</th><td>{{ stats.pending }} pending, {{ stats.failed }} failed</td></tr>
+    <tr><th>X API usage</th><td>
+      {{ api_used }} / {{ api_max }} requests in the last 15 min
+      {% if capped_until %} — <span class="warn">cooling down until {{ capped_until }}</span>{% endif %}
+    </td></tr>
   </table>
   <div class="actions">
     <form method="post" action="/sync/run"><button {% if running or not configured %}disabled{% endif %}>Sync now</button></form>

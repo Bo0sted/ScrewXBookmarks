@@ -11,11 +11,12 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import db, downloader
+from . import db, downloader, logs
 from .reset import wipe_everything
-from .sync import restart_backfill, syncer
+from .sync import WINDOW_MAX_REQUESTS, api_usage, restart_backfill, status_line, syncer
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logs.setup()
+log = logging.getLogger("web")
 
 PAGE_SIZE = 50
 
@@ -23,6 +24,7 @@ PAGE_SIZE = 50
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     db.init()
+    log.info("started · %s", status_line())
     downloader.start()
     await syncer.start()
     yield
@@ -152,10 +154,13 @@ def sync_status(request: Request):
         failed = c.execute(
             "SELECT file, url, error FROM media WHERE status='failed' UNION ALL SELECT file, url, error FROM avatars WHERE status='failed' LIMIT 100"
         ).fetchall()
+    api_used, capped_until = api_usage()
     return templates.TemplateResponse(
         request, "sync.html",
         {"stats": stats, "state": state, "oldest": oldest, "missing": missing, "failed": failed,
-         "running": syncer.running, "progress": syncer.progress, "configured": syncer.configured},
+         "running": syncer.running, "progress": syncer.progress, "configured": syncer.configured,
+         "api_used": api_used, "api_max": WINDOW_MAX_REQUESTS,
+         "capped_until": datetime.fromtimestamp(capped_until).astimezone().strftime("%H:%M") if capped_until else None},
     )
 
 
