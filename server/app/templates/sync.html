@@ -52,6 +52,10 @@
   <table class="kv">
     <tr><th>Progress</th><td><b>{{ "{:,}".format(archive.done) }} / {{ "{:,}".format(archive.total) }}</b> completed ({{ "%.1f" | format(archive.percent) }}%)</td></tr>
     <tr><th>Breakdown</th><td>{{ "{:,}".format(archive.saved) }} saved · {{ "{:,}".format(archive.known) }} already had · {{ "{:,}".format(archive.missing) }} unavailable · {{ "{:,}".format(archive.pending) }} to go</td></tr>
+    <tr><th>Lookup mode</th><td>
+      {% if batch_until %}<span class="warn">one by one</span> — batch lookups unavailable, retrying them after {{ batch_until }}
+      {% else %}batch — up to 20 posts per request (falls back to one by one automatically if X rejects it){% endif %}
+    </td></tr>
     {% if last_import %}
     <tr><th>Last upload</th><td>{{ last_import.file }} · {{ last_import.at | date(true) }} · {{ "{:,}".format(last_import.tweets) }} tweets,
       {{ "{:,}".format(last_import.reposts) }} reposts ({{ "{:,}".format(last_import.added) }} new to the queue, {{ "{:,}".format(last_import.already_saved) }} already saved by sync{% if last_import.duplicates %}, {{ "{:,}".format(last_import.duplicates) }} uploaded before{% endif %}{% if last_import.malformed %}, {{ last_import.malformed }} unreadable entries skipped{% endif %})</td></tr>

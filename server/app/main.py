@@ -203,7 +203,9 @@ def sync_status(request: Request):
          "running": syncer.running, "progress": syncer.progress, "configured": syncer.configured,
          "api_used": api_used, "api_max": WINDOW_MAX_REQUESTS,
          "capped_until": datetime.fromtimestamp(capped_until).astimezone().strftime("%H:%M") if capped_until else None,
-         "archive": archive.progress(), "last_import": last_import},
+         "archive": archive.progress(), "last_import": last_import,
+         "batch_until": None if archive.batch_available() else
+             datetime.fromtimestamp(float(db.get_state("batch_disabled_until"))).astimezone().strftime("%H:%M")},
     )
 
 

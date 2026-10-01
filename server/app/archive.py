@@ -4,14 +4,21 @@ Only IDs and dates are kept from the uploaded file. While any archive item is pe
 archive and nothing else.
 """
 
+import asyncio
 import json
 import logging
+import random
 import re
+import time
+from datetime import datetime
 
-from . import config  # noqa: F401,I001  (before twscrape: disables telemetry)
+from .config import X_COOKIES  # noqa: I001  (before twscrape: disables telemetry)
 
 from twscrape.api import GQL_FEATURES, GQL_URL, OP_TweetDetail
-from twscrape.queue_client import QueueClient
+from twscrape.queue_client import GqlFeaturesOutdatedError, QueueClient
+from twscrape.utils import encode_params, parse_cookies
+from twscrape.xclid import _make_client as make_x_web_client
+from twscrape.xclid import get_scripts_list, get_tw_page_text
 
 from . import db, store
 from .common import Run, page_pause
@@ -136,7 +143,147 @@ def progress_text(p: dict | None = None) -> str:
     return f"{p['done']:,}/{p['total']:,} ({p['percent']:.1f}%)"
 
 
-# ---------- fetching ----------
+# ---------- batch lookups ----------
+# X's web app fetches known posts in bulk with its TweetResultsByRestIds query. Its query ID isn't public
+# and changes with X's deploys, so it's read from X's own web-app scripts (what a browser loads anyway)
+# and cached. If it can't be found or X rejects it, the archive falls back to one-by-one lookups.
+
+BATCH_OP = "TweetResultsByRestIds"
+BATCH_SIZE = 20
+BATCH_OP_TTL = 2 * 86400
+BATCH_RETRY_AFTER = 6 * 3600
+BATCH_TIMEOUT = 120
+MAX_SCRIPTS = 60
+BATCH_MISS = "batch-miss"  # note on items a batch didn't return; they're retried one by one
+
+_QUERY_RE = re.compile(r'queryId:\s*"([\w-]+)"\s*,\s*operationName:\s*"' + BATCH_OP + '"')
+_FEATURES_RE = re.compile(r"featureSwitches:\s*\[([^\]]*)\]")
+_NULL_FEATURES_RE = re.compile(r"cannot be null:\s*(.+)$")
+
+
+def batch_available() -> bool:
+    return time.time() >= float(db.get_state("batch_disabled_until", "0"))
+
+
+def disable_batch(reason: str) -> None:
+    until = time.time() + BATCH_RETRY_AFTER
+    db.set_state(batch_disabled_until=until, batch_op=None)
+    log.warning("batch lookups unavailable (%s) · using one-by-one lookups until %s",
+                reason, datetime.fromtimestamp(until).astimezone().strftime("%H:%M"))
+
+
+async def _discover_batch_op() -> dict | None:
+    cached = json.loads(db.get_state("batch_op") or "null")
+    if cached and time.time() - cached["at"] < BATCH_OP_TTL:
+        return cached
+    log.info("looking up X's batch lookup ID in its web-app scripts")
+    try:
+        async with make_x_web_client(cookies=parse_cookies(X_COOKIES)) as clt:
+            html = await get_tw_page_text("https://x.com", clt)
+            for url in get_scripts_list(html)[:MAX_SCRIPTS]:
+                try:
+                    text = (await clt.get(url)).text
+                except Exception:
+                    continue
+                m = _QUERY_RE.search(text)
+                if m:
+                    fs = _FEATURES_RE.search(text[m.end():m.end() + 6000])
+                    op = {"qid": m.group(1), "features": re.findall(r'"(\w+)"', fs.group(1)) if fs else [], "at": time.time()}
+                    db.set_state(batch_op=json.dumps(op))
+                    log.info("batch lookup found (%s, %d feature flags)", op["qid"], len(op["features"]))
+                    return op
+                await asyncio.sleep(random.uniform(0.2, 0.8))
+    except Exception as e:
+        log.warning("couldn't read X's web-app scripts: %r", e)
+    return None
+
+
+def _next_batch() -> list:
+    """Up to BATCH_SIZE pending items, skipping (and marking) ones the sync already saved."""
+    while True:
+        with db.tx() as c:
+            rows = c.execute(
+                f"""SELECT * FROM archive_items WHERE status='pending' AND (note IS NULL OR note != '{BATCH_MISS}')
+                    ORDER BY reposted_at DESC LIMIT ?""",
+                (BATCH_SIZE,),
+            ).fetchall()
+        fresh = []
+        for item in rows:
+            if _already_saved(item):
+                _mark(item["repost_id"], "known", "already saved by sync")
+            else:
+                fresh.append(item)
+        if fresh or not rows:
+            return fresh
+
+
+def _batch_features(op: dict) -> dict:
+    extra = json.loads(db.get_state("batch_extra_features") or "{}")
+    base = {f: GQL_FEATURES.get(f, False) for f in op["features"]} if op["features"] else dict(GQL_FEATURES)
+    return {**base, **extra}
+
+
+async def _run_batch(r: Run, client: QueueClient, op: dict, items: list) -> bool:
+    """One batch request. Returns False if batching failed (caller falls back to one-by-one)."""
+    ids = [it["original_id"] or it["repost_id"] for it in items]
+    url = f"{GQL_URL}/{op['qid']}/{BATCH_OP}"
+    page = None
+    for _ in range(2):  # second try only after adding feature flags X said were missing
+        params = {
+            "variables": {"tweetIds": ids, "withCommunity": False, "includePromotedContent": False, "withVoice": False},
+            "features": _batch_features(op),
+        }
+        await r.throttle()
+        try:
+            rep = await asyncio.wait_for(client.get(url, params=encode_params(params)), BATCH_TIMEOUT)
+        except GqlFeaturesOutdatedError as e:
+            m = _NULL_FEATURES_RE.search(str(e))
+            if not m:
+                break
+            extra = json.loads(db.get_state("batch_extra_features") or "{}")
+            extra.update({f.strip(): False for f in m.group(1).split(",") if f.strip()})
+            db.set_state(batch_extra_features=json.dumps(extra))
+            log.info("batch lookup needs %d more feature flags · retrying", len(m.group(1).split(",")))
+            continue
+        except TimeoutError:
+            break
+        if rep is not None:
+            page = rep.json()
+            r.budget -= 1
+            r.requests += 1
+        break
+
+    found = list(_tweets(page)) if page else []
+    if not found:
+        errors = "; ".join(e.get("message", "?") for e in (page or {}).get("errors", []))[:200]
+        disable_batch(errors or "X rejected or ignored the batch request")
+        return False
+
+    saved = retry = 0
+    handles: list[str] = []
+    for item in items:
+        original = _find_original(page, item)
+        p = r.save(item["repost_id"], item["reposted_at"], original) if original else None
+        if p:
+            _mark(item["repost_id"], "saved", None)
+            saved += 1
+            handles.append(p["author"]["handle"])
+        else:
+            _mark(item["repost_id"], "pending", BATCH_MISS)  # deleted, withheld, or just not in the batch: check alone
+            retry += 1
+
+    stop = r.budget <= 0
+    pause = 0.0 if stop else page_pause()
+    text = progress_text()
+    outcome = f"batch of {len(items)} in 1 request · {saved} saved" + (f", {retry} to check one by one" if retry else "")
+    r.progress(f"archive · {text} · {outcome}")
+    log.info("%s · %s · %s", text, outcome, "stopping" if stop else f"next in {fmt_duration(pause)}")
+    if not stop:
+        await r.pause(pause)
+    return True
+
+
+# ---------- one-by-one lookups ----------
 
 def _next_item():
     with db.tx() as c:
@@ -196,9 +343,25 @@ def _find_original(page: dict, item) -> dict | None:
 
 
 async def run(r: Run) -> str:
-    """Processes pending archive items within the run's budget. Returns 'done' or 'budget'."""
-    async with QueueClient(r.api.pool, "TweetDetail") as client:
+    """Processes pending archive items within the run's budget. Returns 'done' or 'budget'.
+    Uses batch lookups (up to BATCH_SIZE posts per request) while they work; anything a batch can't
+    resolve, or everything if batching is unavailable, goes through one-by-one lookups."""
+    async with QueueClient(r.api.pool, "TweetDetail") as client, \
+               QueueClient(r.api.pool, BATCH_OP) as batch_client:
+        op = None
         while r.budget > 0:
+            if batch_available():
+                items = _next_batch()
+                if items:
+                    op = op or await _discover_batch_op()
+                    if op is None:
+                        disable_batch("couldn't find X's batch lookup in its web app")
+                    else:
+                        handled = await _run_batch(r, batch_client, op, items)
+                        if handled:
+                            continue
+                        op = None
+
             item = _next_item()
             if item is None:
                 p = progress()
