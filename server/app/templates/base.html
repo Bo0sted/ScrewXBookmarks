@@ -80,6 +80,15 @@
   .v-prev { left: 1rem; }
   .v-next { right: 1rem; }
   .v-close { top: .8rem; right: 1rem; }
+  .toolbar { display: flex; justify-content: flex-end; margin-bottom: .8rem; }
+  .link-btn { background: none; border: none; padding: 0; color: var(--muted); font-size: inherit; }
+  .link-btn:hover:not(:disabled) { color: var(--bad); }
+  #toasts { position: fixed; z-index: 60; left: 50%; bottom: 1rem; transform: translateX(-50%); width: min(92vw, 440px);
+            display: flex; flex-direction: column; gap: .5rem; pointer-events: none; }
+  .toast { padding: .65rem .9rem; border-radius: 8px; background: #2a2f37; color: #fff; font-size: 14px;
+           box-shadow: 0 6px 20px rgba(0, 0, 0, .45); overflow-wrap: anywhere; }
+  .toast.ok { background: #1d6b3c; }
+  .toast.err { background: #8e2b27; }
   @media (max-width: 700px) {
     .v-stage { padding: 3.5rem .4rem 0; }
     .v-prev, .v-next { top: auto; bottom: 3.6rem; transform: none; }
@@ -92,6 +101,7 @@
   <a href="/">Recent</a>
   <a href="/authors">Authors</a>
   <a href="/sync">Sync{% if stats.syncing %} <span class="warn">●</span>{% endif %}</a>
+  <a href="/deleted">Deleted</a>
   <span class="stats">
     <span>{{ stats.posts }} posts · {{ stats.authors }} authors</span>
     {% if stats.pending %}<span class="warn">{{ stats.pending }} downloading</span>{% endif %}
@@ -107,6 +117,7 @@
   <button class="v-btn v-next" aria-label="Next">›</button>
   <div class="v-caption"></div>
 </div>
+<div id="toasts" aria-live="polite"></div>
 <script src="/static/app.js?v={{ asset_v }}"></script>
 </body>
 </html>

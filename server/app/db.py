@@ -73,6 +73,19 @@ CREATE TABLE IF NOT EXISTS archive_items (
 );
 CREATE INDEX IF NOT EXISTS archive_by_status ON archive_items(status, reposted_at DESC);
 
+-- Posts deleted from the web UI (repost removed on X, files wiped); kept so they can be restored.
+CREATE TABLE IF NOT EXISTS deleted (
+  post_id     TEXT PRIMARY KEY,
+  repost_id   TEXT NOT NULL,
+  author_id   TEXT NOT NULL,
+  handle      TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  posted_at   TEXT NOT NULL,
+  reposted_at TEXT NOT NULL,
+  deleted_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS deleted_by_repost ON deleted(repost_id);
+
 CREATE TABLE IF NOT EXISTS state (
   key   TEXT PRIMARY KEY,
   value TEXT

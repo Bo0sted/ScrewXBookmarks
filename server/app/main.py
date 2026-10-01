@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from . import db, downloader, logs, thumbs
 from .reset import wipe_everything
-from . import archive, backfill
+from . import actions, archive, backfill
 from .sync import WINDOW_MAX_REQUESTS, api_usage, status_line, syncer
 
 logs.setup()
@@ -264,3 +264,43 @@ def sync_retry_failed():
             c.execute(f"UPDATE {table} SET status='pending', attempts=0, next_try='' WHERE status='failed'")
     downloader.wake()
     return RedirectResponse("/sync", status_code=303)
+
+
+@app.get("/deleted")
+def deleted(request: Request):
+    with db.tx() as c:
+        rows = c.execute("SELECT * FROM deleted ORDER BY deleted_at DESC").fetchall()
+        stats = _stats(c)
+    return templates.TemplateResponse(request, "deleted.html", {"rows": rows, "stats": stats})
+
+
+async def _action(coro) -> JSONResponse:
+    """Runs a delete/restore and reports {ok, message} for the page's toast."""
+    if not syncer.configured:
+        coro.close()
+        return JSONResponse({"ok": False, "message": "X_USERNAME / X_COOKIES are not set"}, status_code=400)
+    try:
+        return JSONResponse({"ok": True, "message": await coro})
+    except actions.ActionError as e:
+        return JSONResponse({"ok": False, "message": str(e)}, status_code=400)
+    except Exception as e:
+        log.exception("action failed")
+        return JSONResponse({"ok": False, "message": f"{type(e).__name__}: {e}"}, status_code=500)
+
+
+@app.post("/post/{post_id}/delete")
+async def post_delete(post_id: str):
+    return await _action(actions.delete_post(syncer.api, post_id))
+
+
+@app.post("/deleted/{post_id}/restore")
+async def post_restore(post_id: str):
+    return await _action(actions.restore_post(syncer.api, post_id))
+
+
+@app.post("/sync/catchup")
+async def sync_catchup():
+    if not syncer.configured:
+        return JSONResponse({"ok": False, "message": "X_USERNAME / X_COOKIES are not set"}, status_code=400)
+    res = await syncer.catch_up_now()
+    return JSONResponse(res, status_code=200 if res["ok"] else 409)

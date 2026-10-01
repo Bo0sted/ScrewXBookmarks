@@ -65,6 +65,7 @@ class Syncer:
         self.progress = ""
         self._trigger = asyncio.Event()
         self._task: asyncio.Task | None = None
+        self._manual: asyncio.Task | None = None
 
     @property
     def configured(self) -> bool:
@@ -82,11 +83,12 @@ class Syncer:
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._task
-            self._task = None
+        for task in (self._task, self._manual):
+            if task:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        self._task = None
 
     def trigger(self) -> None:
         self._trigger.set()
@@ -114,31 +116,48 @@ class Syncer:
             busy = archive.pending() or not backfill.is_done()
             delay = (next_run_at(busy) - datetime.now().astimezone()).total_seconds()
 
-    async def run_once(self) -> None:
+    async def catch_up_now(self) -> dict:
+        """Web UI: a single catch-up pass right away (no archive, no backfill)."""
         if self.running:
-            return
+            return {"ok": False, "message": "A sync is already running", "new": 0}
+        log.info("catch-up requested from the web UI")
+        self._manual = asyncio.create_task(self.run_once(self._catchup_only))
+        try:
+            return await self._manual
+        except asyncio.CancelledError:
+            return {"ok": False, "message": "Sync was interrupted", "new": 0}
+        finally:
+            self._manual = None
+
+    async def run_once(self, phases=None) -> dict:
+        """One run; `phases` defaults to archive → catch-up → backfill. Returns {ok, message, new}."""
+        if self.running:
+            return {"ok": False, "message": "A sync is already running", "new": 0}
         self.running = True
         started = time.time()
         r = Run(self.api, session_page_budget(), self._set_progress)
         db.set_state(last_start=db.now(), last_error=None)
         try:
             log.info("run started · up to %d requests this run · %s", r.budget, status_line())
-            why = await self._phases(r)
+            why = await (phases or self._phases)(r)
             db.set_state(last_success=db.now())
             log.info(
                 "run finished in %s · %d request%s · +%d new reposts · %s",
                 fmt_duration(time.time() - started), r.requests, "" if r.requests == 1 else "s",
                 r.new, STOP_REASONS[why],
             )
+            return {"ok": True, "message": f"+{r.new} new repost{'' if r.new == 1 else 's'} · {STOP_REASONS[why]}", "new": r.new}
         except asyncio.CancelledError:
             log.info("run interrupted after %d requests · progress is saved, it will resume next run", r.requests)
             raise
         except SyncError as e:
             log.error("run stopped after %d requests: %s", r.requests, e)
             db.set_state(last_error=str(e))
+            return {"ok": False, "message": str(e), "new": r.new}
         except Exception as e:
             log.exception("run failed after %d requests", r.requests)
             db.set_state(last_error=f"{type(e).__name__}: {e}")
+            return {"ok": False, "message": f"{type(e).__name__}: {e}", "new": r.new}
         finally:
             self.running = False
             self.progress = ""
@@ -157,7 +176,8 @@ class Syncer:
             await asyncio.sleep(pause)
         return await self._timeline(r)
 
-    async def _timeline(self, r: Run) -> str:
+    async def _sign_in(self, r: Run) -> str:
+        """Looks up the account (one request) and returns its user id."""
         r.progress("looking up account")
         await r.throttle()
         me = await self.api.user_by_login(X_USERNAME)
@@ -171,7 +191,15 @@ class Syncer:
                  X_USERNAME, f"{me.statusesCount:,}", fmt_duration(pause))
         r.progress(f"signed in · first page in {fmt_duration(pause)}")
         await asyncio.sleep(pause)
+        return my_id
 
+    async def _catchup_only(self, r: Run) -> str:
+        my_id = await self._sign_in(r)
+        async with timeline_client(self.api) as client:
+            return await catchup.run(r, client, my_id)
+
+    async def _timeline(self, r: Run) -> str:
+        my_id = await self._sign_in(r)
         async with timeline_client(self.api) as client:
             if not backfill.is_done() and not backfill.started():
                 # Fresh backfill starts at the top anyway, so it covers catch-up too.

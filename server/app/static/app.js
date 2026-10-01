@@ -172,7 +172,47 @@
     visibleVideos.forEach((v) => v.play().catch(() => {}));
   }
 
+  // ---------- Toasts, and buttons that ask the server to do something (delete, restore, catch-up) ----------
+  const toasts = document.getElementById("toasts");
+  function toast(text, ok) {
+    const t = document.createElement("div");
+    t.className = "toast" + (ok === true ? " ok" : ok === false ? " err" : "");
+    t.textContent = text;
+    toasts.append(t);
+    setTimeout(() => t.remove(), ok === false ? 9000 : 5000);
+  }
+
+  const ACTIONS = {
+    delete: (id) => `/post/${id}/delete`,
+    restore: (id) => `/deleted/${id}/restore`,
+    catchup: () => "/sync/catchup",
+  };
+
+  async function act(btn) {
+    if (btn.disabled) return;
+    const { action, id } = btn.dataset;
+    btn.disabled = true;
+    if (action === "catchup") toast("Syncing latest reposts…", null);
+    let res;
+    try {
+      const r = await fetch(ACTIONS[action](id), { method: "POST" });
+      const j = await r.json().catch(() => ({ message: `HTTP ${r.status}` }));
+      res = { ...j, ok: r.ok && j.ok !== false };
+    } catch (err) {
+      res = { ok: false, message: `Request failed: ${err}` };
+    }
+    toast(res.message, res.ok);
+    if (res.ok && action === "catchup" && res.new) return setTimeout(() => location.reload(), 1500);
+    if (res.ok && action !== "catchup") return btn.closest("[data-row]").remove();
+    btn.disabled = false;
+  }
+
   document.addEventListener("click", (e) => {
+    const actionBtn = e.target.closest("[data-action]");
+    if (actionBtn) {
+      act(actionBtn);
+      return;
+    }
     const more = e.target.closest(".more[data-next]");
     if (more) {
       loadMore();

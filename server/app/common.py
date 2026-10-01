@@ -5,14 +5,17 @@ import json
 import logging
 import math
 import random
+import re
 import time
 from datetime import datetime, timedelta
 
-from .config import QUIET_HOURS  # noqa: I001  (before twscrape: disables telemetry)
+from .config import QUIET_HOURS, X_COOKIES  # noqa: I001  (before twscrape: disables telemetry)
 
 from twscrape.api import GQL_FEATURES, GQL_URL, OP_UserTweets
 from twscrape.queue_client import QueueClient
-from twscrape.utils import encode_params
+from twscrape.utils import encode_params, parse_cookies
+from twscrape.xclid import _make_client as make_x_web_client
+from twscrape.xclid import get_scripts_list, get_tw_page_text
 
 from . import db, downloader, store
 from .logs import fmt_duration
@@ -24,6 +27,9 @@ log = logging.getLogger("sync")
 # timeline requests is ~50 per 15 min; staying far below it avoids looking like a bot.
 WINDOW_SECONDS = 15 * 60
 WINDOW_MAX_REQUESTS = 30
+# Writes (delete/restore a repost) also count above. X allows ~300 posts + reposts per 3 h; stay at half.
+WRITE_WINDOW_SECONDS = 3 * 3600
+WRITE_WINDOW_MAX = 150
 
 KNOWN_STREAK_STOP = 20
 EMPTY_PAGES_END = 3
@@ -64,10 +70,32 @@ def next_run_at(busy: bool) -> datetime:
 
 def api_usage() -> tuple[int, float | None]:
     """(requests in the current 15-min window, unix time the cap lifts if currently capped)."""
-    now = time.time()
-    recent = [t for t in json.loads(db.get_state("api_requests", "[]")) if now - t < WINDOW_SECONDS]
+    recent = _recent("api_requests", WINDOW_SECONDS)
     capped_until = recent[0] + WINDOW_SECONDS if len(recent) >= WINDOW_MAX_REQUESTS else None
     return len(recent), capped_until
+
+
+def _recent(key: str, window: float) -> list[float]:
+    now = time.time()
+    return [t for t in json.loads(db.get_state(key, "[]")) if now - t < window]
+
+
+def reserve_request(write: bool = False) -> float | None:
+    """Records one X request if it fits under the caps and returns None. Otherwise records nothing and
+    returns the unix time it would fit. Timestamps live in the DB so a restart can't reset the windows."""
+    recent = _recent("api_requests", WINDOW_SECONDS)
+    writes = _recent("api_writes", WRITE_WINDOW_SECONDS) if write else []
+    until = recent[0] + WINDOW_SECONDS if len(recent) >= WINDOW_MAX_REQUESTS else None
+    if len(writes) >= WRITE_WINDOW_MAX:
+        until = max(until or 0, writes[0] + WRITE_WINDOW_SECONDS)
+    if until:
+        return until
+    now = time.time()
+    values = {"api_requests": json.dumps([*recent, now])}
+    if write:
+        values["api_writes"] = json.dumps([*writes, now])
+    db.set_state(**values)
+    return None
 
 
 def index_summary() -> tuple[int, str]:
@@ -91,16 +119,12 @@ class Run:
         self._set_progress(text)
 
     async def throttle(self) -> None:
-        """Blocks until another X request fits in the rolling window, then records it.
-        Timestamps live in the DB so a restart can't reset the window."""
+        """Blocks until another X request fits in the rolling window, then records it."""
         while True:
-            now = time.time()
-            recent = [t for t in json.loads(db.get_state("api_requests", "[]")) if now - t < WINDOW_SECONDS]
-            if len(recent) < WINDOW_MAX_REQUESTS:
-                recent.append(now)
-                db.set_state(api_requests=json.dumps(recent))
+            until = reserve_request()
+            if until is None:
                 return
-            wait = recent[0] + WINDOW_SECONDS - now + random.uniform(5, 60)
+            wait = until - time.time() + random.uniform(5, 60)
             resume = datetime.now().astimezone() + timedelta(seconds=wait)
             self.progress(
                 f"cooling down {fmt_duration(wait)} until {resume.strftime('%H:%M')} "
@@ -108,7 +132,7 @@ class Run:
             )
             log.info(
                 "rate cap · %d/%d requests in the last 15 min · cooling down %s (resumes %s)",
-                len(recent), WINDOW_MAX_REQUESTS, fmt_duration(wait), resume.strftime("%H:%M:%S"),
+                WINDOW_MAX_REQUESTS, WINDOW_MAX_REQUESTS, fmt_duration(wait), resume.strftime("%H:%M:%S"),
             )
             await asyncio.sleep(wait)
 
@@ -207,3 +231,50 @@ def log_timeline_page(run: Run, mode: str, flags: list[bool], stopping: bool, pa
         mode, run.pages, new, len(flags) - new, f"{total:,}", oldest, used, WINDOW_MAX_REQUESTS,
         "stopping" if stopping else f"next page in {fmt_duration(pause)}",
     )
+
+
+# ---------- X web-app operations ----------
+# GraphQL operations twscrape doesn't ship (batch lookups, repost/un-repost). Their query IDs aren't public
+# and change with X's deploys, so they're read from X's own web-app scripts (what a browser loads anyway)
+# and cached.
+
+KNOWN_OPS = ("TweetResultsByRestIds", "CreateRetweet", "DeleteRetweet")
+OP_TTL = 2 * 86400
+MAX_SCRIPTS = 60
+_FEATURES_RE = re.compile(r"featureSwitches:\s*\[([^\]]*)\]")
+
+
+def forget_op(name: str) -> None:
+    db.set_state(**{f"op_{name}": None})
+
+
+async def discover_op(name: str) -> dict | None:
+    """{qid, features, at} for one of KNOWN_OPS, cached or read from X's scripts (other known
+    operations found along the way are cached too). None if it can't be found."""
+    cached = json.loads(db.get_state(f"op_{name}") or "null")
+    if cached and time.time() - cached["at"] < OP_TTL:
+        return cached
+    log.info("looking up X's %s query ID in its web-app scripts", name)
+    try:
+        async with make_x_web_client(cookies=parse_cookies(X_COOKIES)) as clt:
+            html = await get_tw_page_text("https://x.com", clt)
+            for url in get_scripts_list(html)[:MAX_SCRIPTS]:
+                try:
+                    text = (await clt.get(url)).text
+                except Exception:
+                    continue
+                for op_name in KNOWN_OPS:
+                    m = re.search(r'queryId:\s*"([\w-]+)"\s*,\s*operationName:\s*"' + op_name + '"', text)
+                    if m:
+                        fs = _FEATURES_RE.search(text[m.end():m.end() + 6000])
+                        op = {"qid": m.group(1), "features": re.findall(r'"(\w+)"', fs.group(1)) if fs else [], "at": time.time()}
+                        db.set_state(**{f"op_{op_name}": json.dumps(op)})
+                        if op_name == name:
+                            cached = op
+                if cached and cached["at"] > time.time() - 60:
+                    log.info("%s found (%s, %d feature flags)", name, cached["qid"], len(cached["features"]))
+                    return cached
+                await asyncio.sleep(random.uniform(0.2, 0.8))
+    except Exception as e:
+        log.warning("couldn't read X's web-app scripts: %r", e)
+    return None

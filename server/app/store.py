@@ -12,8 +12,9 @@ def _ext(url: str, default: str) -> str:
 def is_known(repost_id: str) -> bool:
     with db.tx() as c:
         return c.execute(
-            "SELECT 1 FROM posts WHERE repost_id=? UNION ALL SELECT 1 FROM missing WHERE repost_id=? LIMIT 1",
-            (repost_id, repost_id),
+            """SELECT 1 FROM posts WHERE repost_id=? UNION ALL SELECT 1 FROM missing WHERE repost_id=?
+               UNION ALL SELECT 1 FROM deleted WHERE repost_id=? LIMIT 1""",
+            (repost_id, repost_id, repost_id),
         ).fetchone() is not None
 
 
@@ -56,6 +57,7 @@ def save(p: dict, repost_id: str, reposted_at: str, raw: dict) -> str:
                 (f"{p['id']}_{i}.{m['ext']}", p["id"], i, m["type"], m["url"]),
             )
         c.execute("DELETE FROM missing WHERE repost_id=?", (repost_id,))
+        c.execute("DELETE FROM deleted WHERE post_id=?", (p["id"],))  # reposted again on X
     return "updated" if existed else "saved"
 
 

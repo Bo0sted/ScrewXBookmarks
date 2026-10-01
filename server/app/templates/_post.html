@@ -1,4 +1,4 @@
-<article class="post"
+<article class="post" data-row
   data-caption="{{ p.name }} (@{{ p.handle }}) · {{ p.posted_at | date }}"
   data-link="https://x.com/{{ p.handle }}/status/{{ p.id }}"
   data-count="{{ p.media | length }}">
@@ -12,6 +12,7 @@
     <span title="Posted">posted {{ p.posted_at | date }}</span>
     <span title="{{ p.reposted_at | date(true) }}">reposted {{ p.reposted_at | date }}</span>
     <a href="https://x.com/{{ p.handle }}/status/{{ p.id }}" target="_blank" rel="noopener">view on X ↗</a>
+    <button class="link-btn" data-action="delete" data-id="{{ p.id }}" title="Remove your repost on X and delete this post's files">delete</button>
   </div>
   {% if p.text %}<div class="text">{{ p.text }}</div>{% endif %}
   {% if p.media %}

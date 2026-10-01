@@ -7,21 +7,18 @@ archive and nothing else.
 import asyncio
 import json
 import logging
-import random
 import re
 import time
 from datetime import datetime
 
-from .config import X_COOKIES  # noqa: I001  (before twscrape: disables telemetry)
+from . import config  # noqa: F401, I001  (before twscrape: disables telemetry)
 
 from twscrape.api import GQL_FEATURES, GQL_URL, OP_TweetDetail
 from twscrape.queue_client import GqlFeaturesOutdatedError, QueueClient
-from twscrape.utils import encode_params, parse_cookies
-from twscrape.xclid import _make_client as make_x_web_client
-from twscrape.xclid import get_scripts_list, get_tw_page_text
+from twscrape.utils import encode_params
 
 from . import db, store
-from .common import Run, page_pause
+from .common import Run, discover_op, forget_op, page_pause
 from .logs import fmt_duration
 from .parse import ParseError, parse_tweet, unwrap, x_date
 
@@ -144,20 +141,15 @@ def progress_text(p: dict | None = None) -> str:
 
 
 # ---------- batch lookups ----------
-# X's web app fetches known posts in bulk with its TweetResultsByRestIds query. Its query ID isn't public
-# and changes with X's deploys, so it's read from X's own web-app scripts (what a browser loads anyway)
-# and cached. If it can't be found or X rejects it, the archive falls back to one-by-one lookups.
+# X's web app fetches known posts in bulk with its TweetResultsByRestIds query (found by common.discover_op).
+# If it can't be found or X rejects it, the archive falls back to one-by-one lookups.
 
 BATCH_OP = "TweetResultsByRestIds"
 BATCH_SIZE = 20
-BATCH_OP_TTL = 2 * 86400
 BATCH_RETRY_AFTER = 6 * 3600
 BATCH_TIMEOUT = 120
-MAX_SCRIPTS = 60
 BATCH_MISS = "batch-miss"  # note on items a batch didn't return; they're retried one by one
 
-_QUERY_RE = re.compile(r'queryId:\s*"([\w-]+)"\s*,\s*operationName:\s*"' + BATCH_OP + '"')
-_FEATURES_RE = re.compile(r"featureSwitches:\s*\[([^\]]*)\]")
 _NULL_FEATURES_RE = re.compile(r"cannot be null:\s*(.+)$")
 
 
@@ -167,35 +159,10 @@ def batch_available() -> bool:
 
 def disable_batch(reason: str) -> None:
     until = time.time() + BATCH_RETRY_AFTER
-    db.set_state(batch_disabled_until=until, batch_op=None)
+    db.set_state(batch_disabled_until=until)
+    forget_op(BATCH_OP)
     log.warning("batch lookups unavailable (%s) · using one-by-one lookups until %s",
                 reason, datetime.fromtimestamp(until).astimezone().strftime("%H:%M"))
-
-
-async def _discover_batch_op() -> dict | None:
-    cached = json.loads(db.get_state("batch_op") or "null")
-    if cached and time.time() - cached["at"] < BATCH_OP_TTL:
-        return cached
-    log.info("looking up X's batch lookup ID in its web-app scripts")
-    try:
-        async with make_x_web_client(cookies=parse_cookies(X_COOKIES)) as clt:
-            html = await get_tw_page_text("https://x.com", clt)
-            for url in get_scripts_list(html)[:MAX_SCRIPTS]:
-                try:
-                    text = (await clt.get(url)).text
-                except Exception:
-                    continue
-                m = _QUERY_RE.search(text)
-                if m:
-                    fs = _FEATURES_RE.search(text[m.end():m.end() + 6000])
-                    op = {"qid": m.group(1), "features": re.findall(r'"(\w+)"', fs.group(1)) if fs else [], "at": time.time()}
-                    db.set_state(batch_op=json.dumps(op))
-                    log.info("batch lookup found (%s, %d feature flags)", op["qid"], len(op["features"]))
-                    return op
-                await asyncio.sleep(random.uniform(0.2, 0.8))
-    except Exception as e:
-        log.warning("couldn't read X's web-app scripts: %r", e)
-    return None
 
 
 def _next_batch() -> list:
@@ -303,7 +270,10 @@ def _already_saved(item) -> bool:
         return True
     if item["original_id"]:
         with db.tx() as c:
-            return c.execute("SELECT 1 FROM posts WHERE id=?", (item["original_id"],)).fetchone() is not None
+            return c.execute(
+                "SELECT 1 FROM posts WHERE id=? UNION ALL SELECT 1 FROM deleted WHERE post_id=? LIMIT 1",
+                (item["original_id"], item["original_id"]),
+            ).fetchone() is not None
     return False
 
 
@@ -353,7 +323,7 @@ async def run(r: Run) -> str:
             if batch_available():
                 items = _next_batch()
                 if items:
-                    op = op or await _discover_batch_op()
+                    op = op or await discover_op(BATCH_OP)
                     if op is None:
                         disable_batch("couldn't find X's batch lookup in its web app")
                     else:

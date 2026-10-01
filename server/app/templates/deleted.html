@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Deleted · ScrewXBookmarks{% endblock %}
+{% block main %}
+<h1 style="margin-top:0">Deleted</h1>
+<p class="muted">Posts deleted here: your repost was removed on X and the files were wiped. Restore reposts it on X again;
+it comes back with the next sync.</p>
+{% if rows %}
+<div class="post"><table class="kv">
+  {% for d in rows %}
+  <tr data-row>
+    <td>{{ d.deleted_at | date }}</td>
+    <td>{{ d.name }} <a class="muted" href="https://x.com/{{ d.handle }}" target="_blank" rel="noopener">@{{ d.handle }}</a></td>
+    <td><a href="https://x.com/{{ d.handle }}/status/{{ d.post_id }}" target="_blank" rel="noopener">view on X ↗</a></td>
+    <td><button data-action="restore" data-id="{{ d.post_id }}">Restore</button></td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% else %}
+<p class="muted">Nothing deleted.</p>
+{% endif %}
+{% endblock %}
