@@ -167,11 +167,12 @@ def author(request: Request, author_id: str, page: int = Query(1, ge=1), partial
 
 
 @app.get("/")
-def recent(request: Request, page: int = Query(1, ge=1), partial: int = 0):
+def recent(request: Request, page: int = Query(1, ge=1), partial: int = 0, sort: str = "latest"):
+    order = "ASC" if sort == "oldest" else "DESC"
     with db.tx() as c:
         posts = c.execute(
-            """SELECT p.*, a.name, a.avatar_file FROM posts p JOIN authors a ON a.id = p.author_id
-               ORDER BY p.reposted_at DESC LIMIT ? OFFSET ?""",
+            f"""SELECT p.*, a.name, a.avatar_file FROM posts p JOIN authors a ON a.id = p.author_id
+               ORDER BY p.reposted_at {order} LIMIT ? OFFSET ?""",
             (PAGE_SIZE + 1, (page - 1) * PAGE_SIZE),
         ).fetchall()
         has_more = len(posts) > PAGE_SIZE
@@ -180,6 +181,7 @@ def recent(request: Request, page: int = Query(1, ge=1), partial: int = 0):
         if partial:
             return templates.TemplateResponse(request, "_feed.html", ctx)
         ctx["stats"] = _stats(c)
+        ctx["sort"] = "oldest" if order == "ASC" else "latest"
     return templates.TemplateResponse(request, "recent.html", ctx)
 
 

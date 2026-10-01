@@ -12,7 +12,12 @@
     <span title="Posted">posted {{ p.posted_at | date }}</span>
     <span title="{{ p.reposted_at | date(true) }}">reposted {{ p.reposted_at | date }}</span>
     <a href="https://x.com/{{ p.handle }}/status/{{ p.id }}" target="_blank" rel="noopener">view on X ↗</a>
-    <button class="link-btn" data-action="delete" data-id="{{ p.id }}" title="Remove your repost on X and delete this post's files">delete</button>
+  </div>
+  <div class="post-actions">
+    <button class="menu-btn" aria-label="Actions" aria-haspopup="menu" title="Actions">⋯</button>
+    <div class="menu" role="menu" hidden>
+      <button role="menuitem" data-action="delete" data-id="{{ p.id }}" title="Remove your repost on X and delete this post's files">Delete</button>
+    </div>
   </div>
   {% if p.text %}<div class="text">{{ p.text }}</div>{% endif %}
   {% if p.media %}

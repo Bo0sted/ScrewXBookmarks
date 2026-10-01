@@ -1,7 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Recent · ScrewXBookmarks{% endblock %}
 {% block main %}
-<div class="toolbar"><button data-action="catchup" title="Check X for reposts made since the last sync">Sync latest reposts</button></div>
+<div class="toolbar">
+  <button data-action="catchup" title="Check X for reposts made since the last sync">Sync latest reposts</button>
+  <form method="get">
+    <select name="sort" aria-label="Sort" onchange="this.form.submit()">
+      <option value="latest"{% if sort == 'latest' %} selected{% endif %}>Latest</option>
+      <option value="oldest"{% if sort == 'oldest' %} selected{% endif %}>Oldest</option>
+    </select>
+  </form>
+</div>
 {% if posts %}
 <div class="feed">{% include "_feed.html" %}</div>
 {% else %}

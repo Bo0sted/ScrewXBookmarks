@@ -37,7 +37,7 @@
   @media (max-width: 700px) { .thumbs { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
   .profile { display: flex; gap: 1rem; align-items: center; margin-bottom: 1.25rem; }
   .profile h1 { margin: 0; font-size: 1.4rem; }
-  .post { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .9rem 1rem; margin-bottom: .8rem; }
+  .post { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .9rem 1rem; margin-bottom: .8rem; }
   .post .meta { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--muted); margin-bottom: .45rem; }
   .post .meta .by { display: flex; gap: .5rem; align-items: center; color: var(--text); font-weight: 600; }
   .post .meta .by .avatar { width: 24px; height: 24px; }
@@ -69,8 +69,10 @@
   #viewer { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .93);
             display: grid; grid-template-rows: minmax(0, 1fr) auto; }
   #viewer[hidden] { display: none; }
-  .v-stage { display: grid; place-items: center; min-height: 0; padding: 3.5rem 5rem 0; }
-  .v-media { max-width: 100%; max-height: calc(100vh - 7.5rem); object-fit: contain; border-radius: 6px; background: #000; }
+  .v-stage { display: grid; place-items: center; min-height: 0; padding: 3.5rem 5rem 0; overflow: hidden; }
+  .v-media { max-width: 100%; max-height: calc(100vh - 7.5rem); object-fit: contain; border-radius: 6px; background: #000;
+             transform-origin: 0 0; }
+  .v-media.zoomed { cursor: grab; touch-action: none; }
   .v-caption { text-align: center; padding: .8rem 1rem 1.1rem; color: #cfd3da; font-size: 14px; overflow-wrap: anywhere; }
   .v-btn { position: fixed; z-index: 51; width: 3rem; height: 3rem; border-radius: 50%; padding: 0;
            font-size: 1.9rem; line-height: 1; background: rgba(255, 255, 255, .1); border: none; color: #fff; }
@@ -80,9 +82,18 @@
   .v-prev { left: 1rem; }
   .v-next { right: 1rem; }
   .v-close { top: .8rem; right: 1rem; }
-  .toolbar { display: flex; justify-content: flex-end; margin-bottom: .8rem; }
-  .link-btn { background: none; border: none; padding: 0; color: var(--muted); font-size: inherit; }
-  .link-btn:hover:not(:disabled) { color: var(--bad); }
+  .toolbar { display: flex; justify-content: flex-end; align-items: center; gap: .5rem; margin-bottom: .8rem; }
+  .toolbar form { margin: 0; }
+  select { background: var(--line); color: var(--text); border: 1px solid #353b44; border-radius: 8px; padding: .45rem .6rem; font: inherit; cursor: pointer; }
+  .post .meta { padding-right: 2.2rem; }
+  .post-actions { position: absolute; top: .5rem; right: .5rem; }
+  .menu-btn { background: none; border: none; padding: .1rem .5rem; font-size: 1.25rem; line-height: 1.2; color: var(--muted); }
+  .menu-btn:hover { background: var(--line); color: var(--text); }
+  .menu { position: absolute; right: 0; top: calc(100% + .25rem); z-index: 10; min-width: 9rem; padding: .3rem;
+          background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
+  .menu button { display: block; width: 100%; text-align: left; background: none; border: none; padding: .45rem .7rem; border-radius: 6px; }
+  .menu button:hover:not(:disabled) { background: var(--line); }
+  .menu [data-action="delete"] { color: var(--bad); }
   #toasts { position: fixed; z-index: 60; left: 50%; bottom: 1rem; transform: translateX(-50%); width: min(92vw, 440px);
             display: flex; flex-direction: column; gap: .5rem; pointer-events: none; }
   .toast { padding: .65rem .9rem; border-radius: 8px; background: #2a2f37; color: #fff; font-size: 14px;

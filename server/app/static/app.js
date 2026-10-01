@@ -107,6 +107,7 @@
 
   function show(el) {
     current = el;
+    zoom = { s: 1, x: 0, y: 0 };
     const list = items();
     const i = list.indexOf(el);
     const d = el.dataset;
@@ -127,6 +128,7 @@
       media.play().catch(() => { media.muted = true; media.play().catch(() => {}); });
     }
     media.className = "v-media";
+    media.draggable = false;
     stage.replaceChildren(media);
 
     const count = Number(ctx.dataset.count || 1);
@@ -172,6 +174,56 @@
     visibleVideos.forEach((v) => v.play().catch(() => {}));
   }
 
+  // ---------- Viewer zoom: the wheel zooms toward the cursor, dragging pans while zoomed ----------
+  const MAX_ZOOM = 8;
+  let zoom = { s: 1, x: 0, y: 0 };
+  let drag = null;
+  let panned = false;
+
+  function applyZoom(media) {
+    media.style.transform = zoom.s === 1 ? "" : `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})`;
+    media.classList.toggle("zoomed", zoom.s > 1);
+  }
+
+  stage.addEventListener("wheel", (e) => {
+    const media = stage.querySelector(".v-media");
+    if (!media) return;
+    e.preventDefault();
+    const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY; // Firefox may report lines, not pixels
+    const s = Math.min(MAX_ZOOM, Math.max(1, zoom.s * Math.exp(-dy * 0.0015)));
+    if (s === zoom.s) return;
+    // Cursor position relative to the unzoomed media; keep the point under the cursor where it is.
+    const r = media.getBoundingClientRect();
+    const ox = e.clientX - (r.left - zoom.x);
+    const oy = e.clientY - (r.top - zoom.y);
+    zoom = s === 1 ? { s: 1, x: 0, y: 0 }
+      : { s, x: ox - (ox - zoom.x) * s / zoom.s, y: oy - (oy - zoom.y) * s / zoom.s };
+    applyZoom(media);
+  }, { passive: false });
+
+  stage.addEventListener("pointerdown", (e) => {
+    panned = false;
+    const media = e.target.closest(".v-media");
+    if (!media || zoom.s === 1 || e.button !== 0) return;
+    e.preventDefault();
+    drag = { id: e.pointerId, x: e.clientX - zoom.x, y: e.clientY - zoom.y, media };
+    media.setPointerCapture(e.pointerId);
+  });
+  stage.addEventListener("pointermove", (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    zoom.x = e.clientX - drag.x;
+    zoom.y = e.clientY - drag.y;
+    panned = true;
+    applyZoom(drag.media);
+  });
+  stage.addEventListener("pointerup", () => { drag = null; });
+  stage.addEventListener("pointercancel", () => { drag = null; });
+
+  // ---------- Per-post actions menu ----------
+  function closeMenus(except) {
+    document.querySelectorAll(".menu:not([hidden])").forEach((m) => { if (m !== except) m.hidden = true; });
+  }
+
   // ---------- Toasts, and buttons that ask the server to do something (delete, restore, catch-up) ----------
   const toasts = document.getElementById("toasts");
   function toast(text, ok) {
@@ -208,6 +260,14 @@
   }
 
   document.addEventListener("click", (e) => {
+    const menuBtn = e.target.closest(".menu-btn");
+    if (menuBtn) {
+      const menu = menuBtn.nextElementSibling;
+      closeMenus(menu);
+      menu.hidden = !menu.hidden;
+      return;
+    }
+    closeMenus();
     const actionBtn = e.target.closest("[data-action]");
     if (actionBtn) {
       act(actionBtn);
@@ -226,6 +286,7 @@
   });
 
   viewer.addEventListener("click", (e) => {
+    if (panned) { panned = false; return; } // end of a drag, not a click
     if (e.target.closest(".v-prev")) return step(-1);
     if (e.target.closest(".v-next")) return step(1);
     if (e.target.closest(".v-close")) return close();
@@ -234,6 +295,7 @@
   });
 
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeMenus();
     if (!viewerOpen()) return;
     if (e.key === "ArrowRight") { e.preventDefault(); step(1); }
     else if (e.key === "ArrowLeft") { e.preventDefault(); step(-1); }
@@ -245,7 +307,7 @@
     touchX = e.touches.length === 1 ? e.touches[0].clientX : null;
   }, { passive: true });
   viewer.addEventListener("touchend", (e) => {
-    if (touchX === null) return;
+    if (touchX === null || zoom.s > 1) return; // while zoomed, a swipe pans instead of changing media
     const dx = e.changedTouches[0].clientX - touchX;
     touchX = null;
     if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1);
