@@ -86,6 +86,26 @@ CREATE TABLE IF NOT EXISTS deleted (
 );
 CREATE INDEX IF NOT EXISTS deleted_by_repost ON deleted(repost_id);
 
+-- Tags (see tags.py): on posts directly, and on authors (which tags each of their posts once).
+CREATE TABLE IF NOT EXISTS tags (
+  id         INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS post_tags (
+  post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  tag_id  INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+  PRIMARY KEY (post_id, tag_id)
+);
+CREATE INDEX IF NOT EXISTS post_tags_by_tag ON post_tags(tag_id);
+
+CREATE TABLE IF NOT EXISTS author_tags (
+  author_id TEXT NOT NULL REFERENCES authors(id) ON DELETE CASCADE,
+  tag_id    INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+  PRIMARY KEY (author_id, tag_id)
+);
+
 CREATE TABLE IF NOT EXISTS state (
   key   TEXT PRIMARY KEY,
   value TEXT

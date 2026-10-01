@@ -224,6 +224,204 @@
     document.querySelectorAll(".menu:not([hidden])").forEach((m) => { if (m !== except) m.hidden = true; });
   }
 
+  // ---------- Server calls and the shared modal ----------
+  async function api(method, url, body) {
+    try {
+      const opts = { method };
+      if (body !== undefined) {
+        opts.headers = { "Content-Type": "application/json" };
+        opts.body = JSON.stringify(body);
+      }
+      const r = await fetch(url, opts);
+      const j = await r.json().catch(() => ({ message: `HTTP ${r.status}` }));
+      return { ...j, ok: r.ok && j.ok !== false };
+    } catch (err) {
+      return { ok: false, message: `Request failed: ${err}` };
+    }
+  }
+
+  const h = (tag, props = {}, ...kids) => {
+    const el = Object.assign(document.createElement(tag), props);
+    el.append(...kids);
+    return el;
+  };
+
+  const modal = document.getElementById("modal");
+  const modalBody = modal.querySelector(".modal-body");
+  function openModal(...nodes) {
+    modalBody.replaceChildren(...nodes);
+    modal.hidden = false;
+  }
+  function closeModal() {
+    modal.hidden = true;
+    modalBody.replaceChildren();
+  }
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal || e.target.closest(".modal-close")) closeModal();
+  });
+
+  // ---------- Tags: the 🏷 modal on posts and users; every change applies immediately ----------
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+
+  function chip(tag) {
+    const c = h("a", { className: "tag-chip", href: `/?tags=${tag.id}`, textContent: tag.name });
+    c.dataset.tag = tag.id;
+    return c;
+  }
+
+  // Mirrors a change in the posts' "Tags" footers. A user's tag goes on / comes off all their posts.
+  function updateFooters(kind, id, tag, on) {
+    const sel = kind === "posts" ? `article[data-post="${id}"]` : `article[data-author="${id}"]`;
+    document.querySelectorAll(sel).forEach((post) => {
+      const foot = post.querySelector(".tags-foot");
+      const existing = foot.querySelector(`.tag-chip[data-tag="${tag.id}"]`);
+      if (on && !existing) {
+        const c = chip(tag);
+        const after = [...foot.querySelectorAll(".tag-chip")].find((x) => byName({ name: x.textContent }, tag) > 0);
+        foot.insertBefore(c, after || null);
+      } else if (!on && existing) {
+        existing.remove();
+      }
+      foot.hidden = !foot.querySelector(".tag-chip");
+    });
+  }
+
+  async function openTagger(btn) {
+    const kind = btn.dataset.tagger;
+    const id = btn.dataset.id;
+    const base = `/api/${kind}/${id}/tags`;
+    const res = await api("GET", base);
+    if (!res.ok) return toast(res.message, false);
+    const tags = res.tags;
+    const applied = new Set(res.applied);
+
+    const input = h("input", { type: "search", placeholder: "Find or create a tag…", autocomplete: "off" });
+    const list = h("div", { className: "tag-list" });
+
+    async function setTag(tag, on) {
+      const r = await api(on ? "POST" : "DELETE", `${base}/${tag.id}`);
+      if (r.ok) {
+        if (on) applied.add(tag.id); else applied.delete(tag.id);
+        updateFooters(kind, id, tag, on);
+      } else {
+        toast(r.message, false);
+      }
+      render();
+    }
+
+    async function createAndAdd() {
+      const r = await api("POST", "/api/tags", { name: input.value });
+      if (!r.ok) return toast(r.message, false);
+      tags.push(r.tag);
+      tags.sort(byName);
+      input.value = "";
+      await setTag(r.tag, true);
+    }
+
+    function render() {
+      const q = input.value.trim().toLowerCase();
+      const rows = tags.filter((t) => t.name.toLowerCase().includes(q)).map((t) => {
+        const cb = h("input", { type: "checkbox", checked: applied.has(t.id) });
+        cb.addEventListener("change", () => {
+          cb.disabled = true;
+          setTag(t, cb.checked);
+        });
+        return h("label", { className: "tag-row" }, cb, t.name);
+      });
+      if (q && !tags.some((t) => t.name.toLowerCase() === q)) {
+        const create = h("button", { className: "tag-create" }, `+ Create “${input.value.trim()}”`);
+        create.addEventListener("click", createAndAdd);
+        rows.unshift(create);
+      }
+      if (!rows.length) rows.push(h("p", { className: "muted" }, "No tags yet. Type a name to create one."));
+      list.replaceChildren(...rows);
+    }
+
+    input.addEventListener("input", render);
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      const q = input.value.trim().toLowerCase();
+      if (!q) return;
+      const tag = tags.find((t) => t.name.toLowerCase() === q);
+      if (!tag) return createAndAdd();
+      input.value = "";
+      if (!applied.has(tag.id)) setTag(tag, true); else render();
+    });
+
+    const title = kind === "authors"
+      ? `Tags for ${btn.dataset.label} · applies to each of their posts`
+      : "Tags for this post";
+    render();
+    openModal(h("h3", {}, title), input, list);
+    input.focus();
+  }
+
+  // ---------- Tags page: add, rename, delete (with confirmation) ----------
+  const tagNew = document.getElementById("tag-new");
+  if (tagNew) {
+    tagNew.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const r = await api("POST", "/api/tags", { name: tagNew.elements.tag.value });
+      if (!r.ok) return toast(r.message, false);
+      location.reload();
+    });
+  }
+
+  async function renameTag(row) {
+    const input = row.querySelector(".tag-name");
+    if (input.value.trim() === row.dataset.name) return;
+    const r = await api("PATCH", `/api/tags/${row.dataset.tagId}`, { name: input.value });
+    if (!r.ok) {
+      input.value = row.dataset.name;
+      return toast(r.message, false);
+    }
+    row.dataset.name = input.value = r.tag.name;
+    toast(`Renamed to “${r.tag.name}”`, true);
+  }
+
+  function confirmDeleteTag(row) {
+    const name = row.dataset.name;
+    const cancel = h("button", {}, "Cancel");
+    const del = h("button", { className: "btn-danger" }, "Delete");
+    cancel.addEventListener("click", closeModal);
+    del.addEventListener("click", async () => {
+      del.disabled = true;
+      const r = await api("DELETE", `/api/tags/${row.dataset.tagId}`);
+      closeModal();
+      if (!r.ok) return toast(r.message, false);
+      row.remove();
+      toast(`Deleted tag “${name}”`, true);
+    });
+    openModal(
+      h("h3", {}, `Delete tag “${name}”?`),
+      h("p", { className: "muted" }, "It's removed from every post and user it's on. This can't be undone."),
+      h("div", { className: "modal-actions" }, cancel, del),
+    );
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.matches(".tag-name")) {
+      e.preventDefault();
+      renameTag(e.target.closest("tr"));
+    }
+  });
+
+  // ---------- Tag filter (Recent): each checkbox applies right away; the dropdown stays open ----------
+  const tagFilter = document.getElementById("tag-filter");
+  if (tagFilter) {
+    try {
+      if (sessionStorage.getItem("reopenTagFilter")) {
+        sessionStorage.removeItem("reopenTagFilter");
+        tagFilter.open = true;
+      }
+    } catch {}
+    tagFilter.addEventListener("change", () => {
+      try { sessionStorage.setItem("reopenTagFilter", "1"); } catch {}
+      tagFilter.closest("form").submit();
+    });
+  }
+
   // ---------- Toasts, and buttons that ask the server to do something (delete, restore, catch-up) ----------
   const toasts = document.getElementById("toasts");
   function toast(text, ok) {
@@ -245,14 +443,7 @@
     const { action, id } = btn.dataset;
     btn.disabled = true;
     if (action === "catchup") toast("Syncing latest reposts…", null);
-    let res;
-    try {
-      const r = await fetch(ACTIONS[action](id), { method: "POST" });
-      const j = await r.json().catch(() => ({ message: `HTTP ${r.status}` }));
-      res = { ...j, ok: r.ok && j.ok !== false };
-    } catch (err) {
-      res = { ok: false, message: `Request failed: ${err}` };
-    }
+    const res = await api("POST", ACTIONS[action](id));
     toast(res.message, res.ok);
     if (res.ok && action === "catchup" && res.new) return setTimeout(() => location.reload(), 1500);
     if (res.ok && action !== "catchup") return btn.closest("[data-row]").remove();
@@ -268,6 +459,22 @@
       return;
     }
     closeMenus();
+    document.querySelectorAll("details.dropdown[open]").forEach((d) => { if (!d.contains(e.target)) d.open = false; });
+    const tagger = e.target.closest("[data-tagger]");
+    if (tagger) {
+      openTagger(tagger);
+      return;
+    }
+    const renameBtn = e.target.closest("[data-tag-rename]");
+    if (renameBtn) {
+      renameTag(renameBtn.closest("tr"));
+      return;
+    }
+    const deleteTagBtn = e.target.closest("[data-tag-delete]");
+    if (deleteTagBtn) {
+      confirmDeleteTag(deleteTagBtn.closest("tr"));
+      return;
+    }
     const actionBtn = e.target.closest("[data-action]");
     if (actionBtn) {
       act(actionBtn);
@@ -295,7 +502,10 @@
   });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeMenus();
+    if (e.key === "Escape") {
+      closeMenus();
+      if (!modal.hidden) return closeModal();
+    }
     if (!viewerOpen()) return;
     if (e.key === "ArrowRight") { e.preventDefault(); step(1); }
     else if (e.key === "ArrowLeft") { e.preventDefault(); step(-1); }

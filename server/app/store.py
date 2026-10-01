@@ -40,7 +40,8 @@ def save(p: dict, repost_id: str, reposted_at: str, raw: dict) -> str:
             if c.execute("SELECT status FROM avatars WHERE file=?", (file,)).fetchone()["status"] == "done":
                 c.execute("UPDATE authors SET avatar_file=? WHERE id=?", (file, a["id"]))
 
-        existed = c.execute("SELECT 1 FROM posts WHERE id=?", (p["id"],)).fetchone() is not None
+        old = c.execute("SELECT reposted_at FROM posts WHERE id=?", (p["id"],)).fetchone()
+        existed = old is not None
         # Re-reposting an old post moves it back to the top, same as on X.
         c.execute(
             """INSERT INTO posts(id, repost_id, author_id, handle, text, posted_at, reposted_at, raw)
@@ -51,6 +52,12 @@ def save(p: dict, repost_id: str, reposted_at: str, raw: dict) -> str:
                  handle=excluded.handle, text=excluded.text, raw=excluded.raw""",
             (p["id"], repost_id, a["id"], a["handle"], p["text"], p["posted_at"], reposted_at, json.dumps(raw)),
         )
+        if not existed or reposted_at > old["reposted_at"]:
+            # New post, or reposted again (back at the top): the author's tags apply to it once more.
+            c.execute(
+                "INSERT OR IGNORE INTO post_tags(post_id, tag_id) SELECT ?, tag_id FROM author_tags WHERE author_id=?",
+                (p["id"], a["id"]),
+            )
         for i, m in enumerate(p["media"]):
             c.execute(
                 "INSERT OR IGNORE INTO media(file, post_id, idx, type, url) VALUES (?, ?, ?, ?, ?)",

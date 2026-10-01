@@ -1,4 +1,4 @@
-<article class="post" data-row
+<article class="post" data-row data-post="{{ p.id }}" data-author="{{ p.author_id }}"
   data-caption="{{ p.name }} (@{{ p.handle }}) · {{ p.posted_at | date }}"
   data-link="https://x.com/{{ p.handle }}/status/{{ p.id }}"
   data-count="{{ p.media | length }}">
@@ -14,6 +14,7 @@
     <a href="https://x.com/{{ p.handle }}/status/{{ p.id }}" target="_blank" rel="noopener">view on X ↗</a>
   </div>
   <div class="post-actions">
+    <button class="icon-btn" data-tagger="posts" data-id="{{ p.id }}" aria-label="Tags" title="Tags">🏷</button>
     <button class="menu-btn" aria-label="Actions" aria-haspopup="menu" title="Actions">⋯</button>
     <div class="menu" role="menu" hidden>
       <button role="menuitem" data-action="delete" data-id="{{ p.id }}" title="Remove your repost on X and delete this post's files">Delete</button>
@@ -36,4 +37,8 @@
     {% endfor %}
   </div>
   {% endif %}
+  <div class="tags-foot"{% if not p.tags %} hidden{% endif %}>
+    <span class="muted">🏷 Tags</span>
+    {% for t in p.tags %}<a class="tag-chip" data-tag="{{ t.id }}" href="/?tags={{ t.id }}">{{ t.name }}</a>{% endfor %}
+  </div>
 </article>

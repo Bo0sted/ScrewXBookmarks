@@ -22,7 +22,7 @@
   .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--line); object-fit: cover; flex: none; }
   .avatar.big { width: 72px; height: 72px; }
   .muted { color: var(--muted); }
-  input[type=search] { background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  input[type=search], input[type=text] { background: var(--panel); border: 1px solid var(--line); color: var(--text);
                        padding: .5rem .75rem; border-radius: 8px; width: 100%; max-width: 360px; }
   .folders { display: flex; flex-direction: column; gap: .7rem; margin-top: 1rem; }
   .folder { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
@@ -82,13 +82,13 @@
   .v-prev { left: 1rem; }
   .v-next { right: 1rem; }
   .v-close { top: .8rem; right: 1rem; }
-  .toolbar { display: flex; justify-content: flex-end; align-items: center; gap: .5rem; margin-bottom: .8rem; }
+  .toolbar { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: .5rem; margin-bottom: .8rem; }
   .toolbar form { margin: 0; }
   select { background: var(--line); color: var(--text); border: 1px solid #353b44; border-radius: 8px; padding: .45rem .6rem; font: inherit; cursor: pointer; }
-  .post .meta { padding-right: 2.2rem; }
-  .post-actions { position: absolute; top: .5rem; right: .5rem; }
-  .menu-btn { background: none; border: none; padding: .1rem .5rem; font-size: 1.25rem; line-height: 1.2; color: var(--muted); }
-  .menu-btn:hover { background: var(--line); color: var(--text); }
+  .post .meta { padding-right: 4.6rem; }
+  .post-actions { position: absolute; top: .5rem; right: .5rem; display: flex; gap: .15rem; }
+  .menu-btn, .icon-btn { background: none; border: none; padding: .1rem .5rem; font-size: 1.25rem; line-height: 1.2; color: var(--muted); }
+  .menu-btn:hover, .icon-btn:hover { background: var(--line); color: var(--text); }
   .menu { position: absolute; right: 0; top: calc(100% + .25rem); z-index: 10; min-width: 9rem; padding: .3rem;
           background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
   .menu button { display: block; width: 100%; text-align: left; background: none; border: none; padding: .45rem .7rem; border-radius: 6px; }
@@ -100,7 +100,46 @@
            box-shadow: 0 6px 20px rgba(0, 0, 0, .45); overflow-wrap: anywhere; }
   .toast.ok { background: #1d6b3c; }
   .toast.err { background: #8e2b27; }
+  .tags-foot { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; margin-top: .7rem; padding-top: .55rem;
+               border-top: 1px solid var(--line); font-size: 13px; }
+  .tags-foot[hidden] { display: none; }
+  .tag-chip { background: var(--line); color: var(--text); border-radius: 999px; padding: .1rem .65rem; }
+  .tag-chip:hover { background: #323843; text-decoration: none; }
+  .profile .tag-user-btn { margin-left: auto; }
+  a.button, .dropdown summary { display: inline-block; background: var(--line); color: var(--text); border: 1px solid #353b44;
+                                border-radius: 8px; padding: .45rem .9rem; cursor: pointer; }
+  a.button:hover, .dropdown summary:hover { border-color: var(--accent); text-decoration: none; }
+  .dropdown { position: relative; }
+  .dropdown summary { list-style: none; user-select: none; }
+  .dropdown summary::-webkit-details-marker { display: none; }
+  .dropdown-menu { position: absolute; right: 0; top: calc(100% + .25rem); z-index: 10; min-width: 12rem; max-height: 60vh; overflow: auto;
+                   padding: .3rem; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+                   box-shadow: 0 6px 20px rgba(0, 0, 0, .45); }
+  .dropdown-menu label { display: flex; gap: .5rem; align-items: center; padding: .4rem .6rem; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+  .dropdown-menu label:hover { background: var(--line); }
+  .modal { position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, .6); display: grid; place-items: center; padding: 1rem; }
+  .modal[hidden] { display: none; }
+  .modal-box { position: relative; width: min(100%, 420px); max-height: 80vh; overflow: auto; padding: 1.1rem 1.2rem;
+               background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  .modal-box h3 { margin: 0 2rem .8rem 0; font-size: 1.05rem; }
+  .modal-box input[type=search] { max-width: none; }
+  .modal-close { position: absolute; top: .5rem; right: .6rem; background: none; border: none; padding: .1rem .45rem;
+                 font-size: 1.4rem; line-height: 1; color: var(--muted); }
+  .modal-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
+  .tag-list { display: flex; flex-direction: column; gap: .1rem; margin-top: .6rem; }
+  .tag-row { display: flex; gap: .5rem; align-items: center; padding: .35rem .45rem; border-radius: 6px; cursor: pointer; }
+  .tag-row:hover { background: var(--line); }
+  .tag-create { text-align: left; margin-bottom: .3rem; }
+  .tag-new { display: flex; gap: .5rem; margin-bottom: 1rem; }
+  .tag-buttons { white-space: nowrap; text-align: right; }
+  .tag-table input { width: 100%; max-width: none; }
+  .tag-table td:nth-child(2) { white-space: nowrap; }
+  .tag-new button, .tag-user-btn { white-space: nowrap; }
   @media (max-width: 700px) {
+    .tag-table tr { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; padding: .55rem 0; border-bottom: 1px solid var(--line); }
+    table.kv.tag-table td { border: none; padding: 0; }
+    .tag-table td:first-child { flex: 1 1 100%; }
+    .tag-table .tag-buttons { margin-left: auto; }
     .v-stage { padding: 3.5rem .4rem 0; }
     .v-prev, .v-next { top: auto; bottom: 3.6rem; transform: none; }
   }
@@ -113,6 +152,7 @@
   <a href="/authors">Authors</a>
   <a href="/sync">Sync{% if stats.syncing %} <span class="warn">●</span>{% endif %}</a>
   <a href="/deleted">Deleted</a>
+  <a href="/tags">Tags</a>
   <span class="stats">
     <span>{{ stats.posts }} posts · {{ stats.authors }} authors</span>
     {% if stats.pending %}<span class="warn">{{ stats.pending }} downloading</span>{% endif %}
@@ -127,6 +167,12 @@
   <div class="v-stage"></div>
   <button class="v-btn v-next" aria-label="Next">›</button>
   <div class="v-caption"></div>
+</div>
+<div id="modal" class="modal" hidden>
+  <div class="modal-box" role="dialog" aria-modal="true">
+    <button class="modal-close" aria-label="Close">×</button>
+    <div class="modal-body"></div>
+  </div>
 </div>
 <div id="toasts" aria-live="polite"></div>
 <script src="/static/app.js?v={{ asset_v }}"></script>

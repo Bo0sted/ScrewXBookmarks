@@ -1,17 +1,28 @@
 {% extends "base.html" %}
 {% block title %}Recent · ScrewXBookmarks{% endblock %}
 {% block main %}
-<div class="toolbar">
-  <button data-action="catchup" title="Check X for reposts made since the last sync">Sync latest reposts</button>
-  <form method="get">
-    <select name="sort" aria-label="Sort" onchange="this.form.submit()">
-      <option value="latest"{% if sort == 'latest' %} selected{% endif %}>Latest</option>
-      <option value="oldest"{% if sort == 'oldest' %} selected{% endif %}>Oldest</option>
-    </select>
-  </form>
-</div>
+<form method="get" class="toolbar">
+  <button type="button" data-action="catchup" title="Check X for reposts made since the last sync">Sync latest reposts</button>
+  {% if all_tags %}
+  <details class="dropdown" id="tag-filter">
+    <summary>🏷 Tags{% if selected %} ({{ selected | length }}){% endif %}</summary>
+    <div class="dropdown-menu">
+      {% for t in all_tags %}
+      <label><input type="checkbox" name="tags" value="{{ t.id }}"{% if t.id in selected %} checked{% endif %}> {{ t.name }}</label>
+      {% endfor %}
+    </div>
+  </details>
+  {% endif %}
+  {% if selected %}<a class="button" href="/{% if sort == 'oldest' %}?sort=oldest{% endif %}">Clear tags filter</a>{% endif %}
+  <select name="sort" aria-label="Sort" onchange="this.form.submit()">
+    <option value="latest"{% if sort == 'latest' %} selected{% endif %}>Latest</option>
+    <option value="oldest"{% if sort == 'oldest' %} selected{% endif %}>Oldest</option>
+  </select>
+</form>
 {% if posts %}
 <div class="feed">{% include "_feed.html" %}</div>
+{% elif selected %}
+<p class="muted">No posts with the selected tags.</p>
 {% else %}
 <p class="muted">Nothing indexed yet — check the <a href="/sync">sync page</a>.</p>
 {% endif %}

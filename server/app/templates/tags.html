@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Tags · ScrewXBookmarks{% endblock %}
+{% block main %}
+<h1 style="margin-top:0">Tags</h1>
+<form id="tag-new" class="tag-new">
+  <input type="text" name="tag" placeholder="New tag name" maxlength="50" autocomplete="off" required>
+  <button>Add tag</button>
+</form>
+{% if tags %}
+<div class="post"><table class="kv tag-table">
+  {% for t in tags %}
+  <tr data-row data-tag-id="{{ t.id }}" data-name="{{ t.name }}">
+    <td><input type="text" class="tag-name" value="{{ t.name }}" maxlength="50" aria-label="Tag name"></td>
+    <td class="muted"><a href="/?tags={{ t.id }}">{{ t.posts }} post{{ '' if t.posts == 1 else 's' }}</a>{% if t.authors %} · {{ t.authors }} user{{ '' if t.authors == 1 else 's' }}{% endif %}</td>
+    <td class="tag-buttons"><button data-tag-rename>Rename</button> <button class="btn-danger" data-tag-delete>Delete</button></td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% else %}
+<p class="muted">No tags yet. Add one above, or with the 🏷 button on any post.</p>
+{% endif %}
+{% endblock %}

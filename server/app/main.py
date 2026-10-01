@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .config import MEDIA_DIR  # noqa: I001  (must import first: disables twscrape telemetry)
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from urllib.parse import urlencode
 
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -17,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 from . import db, downloader, logs, thumbs
 from .reset import wipe_everything
 from . import actions, archive, backfill
+from . import tags as tagging
 from .sync import WINDOW_MAX_REQUESTS, api_usage, status_line, syncer
 
 logs.setup()
@@ -80,8 +81,10 @@ def _with_media(c, posts: list) -> list[dict]:
     by_post: dict[str, list] = {}
     for r in rows:
         by_post.setdefault(r["post_id"], []).append(dict(r))
+    tags_by_post = tagging.for_posts(c, ids)
     for p in posts:
         p["media"] = by_post.get(p["id"], [])
+        p["tags"] = tags_by_post.get(p["id"], [])
     return posts
 
 
@@ -93,9 +96,8 @@ def _next_url(request: Request, page: int, has_more: bool) -> str | None:
     """URL of the next chunk, fetched by the page's infinite scroll (partial=1 returns just the items)."""
     if not has_more:
         return None
-    params = dict(request.query_params)
-    params.update(page=str(page + 1), partial="1")
-    return f"{request.url.path}?{urlencode(params)}"
+    params = [(k, v) for k, v in request.query_params.multi_items() if k not in ("page", "partial")]
+    return f"{request.url.path}?{urlencode([*params, ('page', page + 1), ('partial', 1)])}"
 
 
 @app.get("/thumb/{size}/{file:path}")
@@ -167,13 +169,18 @@ def author(request: Request, author_id: str, page: int = Query(1, ge=1), partial
 
 
 @app.get("/")
-def recent(request: Request, page: int = Query(1, ge=1), partial: int = 0, sort: str = "latest"):
+def recent(request: Request, page: int = Query(1, ge=1), partial: int = 0, sort: str = "latest",
+           tags: list[int] = Query([])):
+    """Newest reposts first (or oldest). `tags` filters to posts having any of the given tags."""
     order = "ASC" if sort == "oldest" else "DESC"
+    where = ""
+    if tags:
+        where = f"WHERE p.id IN (SELECT post_id FROM post_tags WHERE tag_id IN ({','.join('?' * len(tags))}))"
     with db.tx() as c:
         posts = c.execute(
             f"""SELECT p.*, a.name, a.avatar_file FROM posts p JOIN authors a ON a.id = p.author_id
-               ORDER BY p.reposted_at {order} LIMIT ? OFFSET ?""",
-            (PAGE_SIZE + 1, (page - 1) * PAGE_SIZE),
+               {where} ORDER BY p.reposted_at {order} LIMIT ? OFFSET ?""",
+            (*tags, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE),
         ).fetchall()
         has_more = len(posts) > PAGE_SIZE
         posts = _with_media(c, posts[:PAGE_SIZE])
@@ -181,7 +188,7 @@ def recent(request: Request, page: int = Query(1, ge=1), partial: int = 0, sort:
         if partial:
             return templates.TemplateResponse(request, "_feed.html", ctx)
         ctx["stats"] = _stats(c)
-        ctx["sort"] = "oldest" if order == "ASC" else "latest"
+    ctx.update(sort="oldest" if order == "ASC" else "latest", all_tags=tagging.all_tags(), selected=set(tags))
     return templates.TemplateResponse(request, "recent.html", ctx)
 
 
@@ -306,3 +313,55 @@ async def sync_catchup():
         return JSONResponse({"ok": False, "message": "X_USERNAME / X_COOKIES are not set"}, status_code=400)
     res = await syncer.catch_up_now()
     return JSONResponse(res, status_code=200 if res["ok"] else 409)
+
+
+# ---------- tags ----------
+
+@app.get("/tags")
+def tags_page(request: Request):
+    with db.tx() as c:
+        stats = _stats(c)
+    return templates.TemplateResponse(request, "tags.html", {"tags": tagging.all_tags(), "stats": stats})
+
+
+def _tag_call(fn) -> JSONResponse:
+    try:
+        return JSONResponse({"ok": True, **(fn() or {})})
+    except tagging.TagError as e:
+        return JSONResponse({"ok": False, "message": str(e)}, status_code=400)
+
+
+def _kind(kind: str) -> str:
+    if kind not in tagging.KINDS:
+        raise HTTPException(404, "unknown kind")
+    return kind
+
+
+@app.post("/api/tags")
+def tag_create(payload: dict = Body(...)):
+    return _tag_call(lambda: {"tag": tagging.create(payload.get("name"))})
+
+
+@app.patch("/api/tags/{tag_id}")
+def tag_rename(tag_id: int, payload: dict = Body(...)):
+    return _tag_call(lambda: {"tag": tagging.rename(tag_id, payload.get("name"))})
+
+
+@app.delete("/api/tags/{tag_id}")
+def tag_delete(tag_id: int):
+    return _tag_call(lambda: tagging.delete(tag_id))
+
+
+@app.get("/api/{kind}/{target_id}/tags")
+def target_tags(kind: str, target_id: str):
+    return _tag_call(lambda: tagging.for_target(_kind(kind), target_id))
+
+
+@app.post("/api/{kind}/{target_id}/tags/{tag_id}")
+def target_tag_add(kind: str, target_id: str, tag_id: int):
+    return _tag_call(lambda: tagging.add(_kind(kind), target_id, tag_id))
+
+
+@app.delete("/api/{kind}/{target_id}/tags/{tag_id}")
+def target_tag_remove(kind: str, target_id: str, tag_id: int):
+    return _tag_call(lambda: tagging.remove(_kind(kind), target_id, tag_id))
