@@ -30,7 +30,8 @@ from .parse import ParseError, bottom_cursor, count_timeline_items, find_reposts
 log = logging.getLogger("sync")
 
 KNOWN_STREAK_STOP = 20
-EMPTY_PAGES_END = 2
+EMPTY_PAGES_END = 3
+BACKFILL_END_CONFIRMATIONS = 2
 
 # Hard cap on authenticated X requests, independent of the random pacing. X's observed limit for
 # timeline requests is ~50 per 15 min; staying far below it avoids looking like a bot.
@@ -127,6 +128,9 @@ class Syncer:
             log.warning("X_USERNAME / X_COOKIES not set; sync disabled")
             return
         await self.api.pool.add_account_cookies(X_USERNAME, X_COOKIES)
+        # Only this process uses the session, so any lock left by a crash/hard stop is stale. Without this,
+        # the first run after such a restart waits silently for up to 15 min for the lock to expire.
+        await self.api.pool.reset_locks()
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
@@ -176,8 +180,13 @@ class Syncer:
                 raise SyncError(await self._account_problem() or f"could not look up @{X_USERNAME}")
             my_id = str(me.id)
             db.set_state(user_id=my_id, statuses_count=me.statusesCount)
-            log.info("signed in as @%s · X reports %s posts on the account", X_USERNAME, f"{me.statusesCount:,}")
-            await asyncio.sleep(page_pause())
+            pause = page_pause()
+            log.info(
+                "signed in as @%s · X reports %s posts on the account · first page in %s",
+                X_USERNAME, f"{me.statusesCount:,}", fmt_duration(pause),
+            )
+            self.progress = f"signed in · first page in {fmt_duration(pause)}"
+            await asyncio.sleep(pause)
 
             done = db.get_state("backfill_done") == "1"
             cursor = db.get_state("backfill_cursor")
@@ -185,13 +194,15 @@ class Syncer:
             async with QueueClient(self.api.pool, "UserTweets") as client:
                 budget, why = await self._walk(client, my_id, None, deep, budget)
                 if not done and not deep and why == "caught_up" and budget > 0:
-                    log.info("caught up with new reposts · resuming history backfill")
-                    await asyncio.sleep(page_pause())
+                    pause = page_pause()
+                    log.info("caught up with new reposts · resuming history backfill in %s", fmt_duration(pause))
+                    await asyncio.sleep(pause)
                     budget, why = await self._walk(client, my_id, cursor, True, budget)
             db.set_state(last_success=db.now())
             log.info(
-                "run finished in %s · %d pages · +%d new reposts · %s",
-                fmt_duration(time.time() - started), self._run_pages, self._run_new, STOP_REASONS[why],
+                "run finished in %s · %d page%s · +%d new reposts · %s",
+                fmt_duration(time.time() - started), self._run_pages, "" if self._run_pages == 1 else "s",
+                self._run_new, STOP_REASONS[why],
             )
         except asyncio.CancelledError:
             log.info("run interrupted after %d pages · progress is saved, it will resume next run", self._run_pages)
@@ -244,11 +255,20 @@ class Syncer:
                 downloader.wake()
 
             nxt = bottom_cursor(page)
-            empty = empty + 1 if count_timeline_items(page) == 0 else 0
+            items = count_timeline_items(page)
+            empty = empty + 1 if items == 0 else 0
             if deep and nxt:
                 db.set_state(backfill_cursor=nxt)
 
-            if not nxt or nxt == cursor or empty >= EMPTY_PAGES_END:
+            end_reason = None
+            if not nxt:
+                end_reason = f"X sent no 'next page' cursor ({items} entries on the page)"
+            elif nxt == cursor:
+                end_reason = "X returned the same cursor again"
+            elif empty >= EMPTY_PAGES_END:
+                end_reason = f"{empty} empty pages in a row"
+
+            if end_reason:
                 stop = "end"
             elif not deep and streak >= KNOWN_STREAK_STOP:
                 stop = "caught_up"
@@ -270,10 +290,22 @@ class Syncer:
                 "stopping" if stop else f"next page in {fmt_duration(pause)}",
             )
 
+            if deep and stop != "end":
+                db.set_state(backfill_end_checks=0)  # timeline continued past here, so any earlier "end" was false
             if stop:
+                if stop == "end":
+                    log.info("timeline ended: %s", end_reason)
                 if stop == "end" and deep:
-                    db.set_state(backfill_done=1, backfill_cursor=None, backfill_finished_at=db.now())
-                    log.info("backfill complete · reached the end of your timeline (oldest repost %s)", oldest)
+                    # X sometimes returns a short/empty page mid-timeline. Only trust "the end" once it
+                    # repeats on a later run from the same position.
+                    checks = int(db.get_state("backfill_end_checks", "0")) + 1
+                    if checks >= BACKFILL_END_CONFIRMATIONS:
+                        db.set_state(backfill_done=1, backfill_cursor=None, backfill_end_checks=0,
+                                     backfill_finished_at=db.now())
+                        log.info("backfill complete · end of timeline confirmed (oldest repost %s)", oldest)
+                    else:
+                        db.set_state(backfill_end_checks=checks, backfill_cursor=nxt or cursor)
+                        log.info("backfill paused · will re-check from this point next run before calling it complete")
                 return budget, stop
             cursor = nxt
             if pause > 60:
@@ -327,4 +359,4 @@ syncer = Syncer()
 
 
 def restart_backfill() -> None:
-    db.set_state(backfill_done=0, backfill_cursor=None)
+    db.set_state(backfill_done=0, backfill_cursor=None, backfill_end_checks=0)
